@@ -484,94 +484,163 @@ with tab2:
 # TAB 3: 주요공종 분석
 # ═══════════════════════════════════════════════════════════════
 with tab3:
+
+    # ── CP 정의 (하수관로 사업 기준) ─────────────────────────
+    CP_DEFINITION = [
+        {
+            "order":    1,
+            "대공종":   "토공",
+            "cp_name":  "터파기",
+            "keywords": ["터파기","굴착"],
+            "exclude":  ["운반","사토","소운반"],
+            "color":    "#378ADD",
+            "reason":   "굴착 완료 전 후속공종 착수 불가. 운반은 동시진행으로 CP 제외.",
+        },
+        {
+            "order":    2,
+            "대공종":   "관로공",
+            "cp_name":  "관 부설·접합",
+            "keywords": ["관 부설","관부설","PE다중벽관","고강성PVC","주철관","GRP관","유리섬유복합관","흄관"],
+            "exclude":  ["수압시험","CCTV","수밀시험"],
+            "color":    "#D85A30",
+            "reason":   "전체 공기의 핵심. 수압시험·CCTV는 구간별 병행 가능하여 CP 제외.",
+        },
+        {
+            "order":    3,
+            "대공종":   "배수설비공",
+            "cp_name":  "배수설비 설치",
+            "keywords": ["배수설비","오수받이","우수받이","연결관","집수정","트렌치","측구"],
+            "exclude":  [],
+            "color":    "#9B59B6",
+            "reason":   "간선 완료 후 연결. 개별 민원·협의로 공기 지연 주요 원인.",
+        },
+        {
+            "order":    4,
+            "대공종":   "구조물공",
+            "cp_name":  "맨홀 설치",
+            "keywords": ["맨홀","PC맨홀","GRP맨홀","공기변실","이토실","유량계실"],
+            "exclude":  [],
+            "color":    "#E67E22",
+            "reason":   "관로 부설 후 설치. 물량 많을수록 공기 영향 큼.",
+        },
+        {
+            "order":    5,
+            "대공종":   "포장공",
+            "cp_name":  "보조기층·아스콘포장",
+            "keywords": ["보조기층","아스팔트","아스콘","콘크리트 표층","미끄럼방지"],
+            "exclude":  ["포장절단","철거","텍코팅","프라임코팅"],
+            "color":    "#27AE60",
+            "reason":   "최종 복구공종. 되메우기 완료 후 시작. 포장절단은 선행 단순작업으로 CP 제외.",
+        },
+        {
+            "order":    6,
+            "대공종":   "추진공",
+            "cp_name":  "추진관 설치",
+            "keywords": ["추진","압입","비굴착","HDD","관추진"],
+            "exclude":  [],
+            "color":    "#E74C3C",
+            "reason":   "도로·철도 횡단 구간. 해당 구간 있을 경우 전체 공기 지배 가능.",
+        },
+    ]
+
+    # ── CP 매핑 함수 ──────────────────────────────────────────
+    def map_cp_group(name):
+        for cp in CP_DEFINITION:
+            # 제외 키워드 먼저 체크
+            if any(ex in name for ex in cp["exclude"]):
+                continue
+            if any(kw in name for kw in cp["keywords"]):
+                return cp["대공종"]
+        return None  # CP 아님
+
+    # ── MAJOR_WORKS에서 CP 항목 추출 ─────────────────────────
     df_mw = pd.DataFrame(MAJOR_WORKS)
     df_mw["labor_ratio"] = df_mw["labor"] / df_mw["amount"]
+    df_mw["cp_group"]    = df_mw["name"].apply(map_cp_group)
+    df_mw["is_cp"]       = df_mw["cp_group"].notna()
+
+    df_cp     = df_mw[df_mw["is_cp"]].copy()
+    df_non_cp = df_mw[~df_mw["is_cp"]].copy()
+
+    # ── 상단 요약 카드 ────────────────────────────────────────
+    st.subheader("주요공종 CP 분석")
+    st.caption("하수관로 사업 기준 크리티컬패스 자동 선정 | 운반·수압시험 등 비CP 공종 제외")
 
     ca,cb,cc,cd = st.columns(4)
-    ca.metric("주요공정 총계", f"{len(df_mw)}건")
-    cb.metric("총 금액",       fmt_억(df_mw["amount"].sum()))
-    cc.metric("총 노무비",     fmt_억(df_mw["labor"].sum()))
-    cd.metric("야간공종",      f"{df_mw['night'].sum()}건")
+    ca.metric("전체 주요공종",   f"{len(df_mw)}건")
+    cb.metric("CP 공종",         f"{len(df_cp)}건")
+    cc.metric("총 CP 노무비",    fmt_억(df_cp["labor"].sum()) if len(df_cp)>0 else "0억")
+    cd.metric("야간 CP 공종",    f"{df_cp['night'].sum()}건" if len(df_cp)>0 else "0건")
 
     st.markdown("---")
-    left, mid, right = st.columns([1,3,1.5])
+
+    # ── CP 흐름도 ─────────────────────────────────────────────
+    st.markdown("#### 🔴 크리티컬패스 흐름")
+    cp_cols = st.columns(len(CP_DEFINITION))
+    for i, cp in enumerate(CP_DEFINITION):
+        with cp_cols[i]:
+            # 해당 CP 그룹 데이터 있는지 확인
+            grp_data = df_cp[df_cp["cp_group"]==cp["대공종"]] if len(df_cp)>0 else pd.DataFrame()
+            has_data = len(grp_data) > 0
+            border_color = cp["color"] if has_data else "#555"
+            opacity = "1.0" if has_data else "0.4"
+            st.markdown(f"""
+<div style='border:2px solid {border_color};border-radius:8px;padding:8px;
+            text-align:center;opacity:{opacity};margin:2px'>
+    <div style='font-size:11px;color:{border_color};font-weight:bold'>{cp["order"]}순위</div>
+    <div style='font-size:13px;font-weight:bold'>{cp["대공종"]}</div>
+    <div style='font-size:10px;color:#aaa'>{cp["cp_name"]}</div>
+    {'<div style="font-size:10px;color:#4CAF50">✅ 데이터 있음</div>' if has_data else '<div style="font-size:10px;color:#888">샘플 없음</div>'}
+</div>
+""", unsafe_allow_html=True)
+            if i < len(CP_DEFINITION)-1:
+                st.markdown("<div style='text-align:center;font-size:20px'>→</div>", unsafe_allow_html=True)
+
+    st.markdown("---")
+
+    # ── 메인 레이아웃 ─────────────────────────────────────────
+    left, right = st.columns([2, 1])
 
     with left:
-        st.markdown("#### 🔍 필터")
-        show_day   = st.checkbox("주간공종", value=True)
-        show_night = st.checkbox("야간공종", value=True)
-        st.markdown("**공종그룹**")
-        all_groups = df_mw["group"].unique().tolist()
-        if st.button("전체선택"):
-            for g in all_groups: st.session_state[f"grp_{g}"] = True
-        if st.button("전체해제"):
-            for g in all_groups: st.session_state[f"grp_{g}"] = False
-        selected_groups = []
-        for g in all_groups:
-            checked = st.checkbox(g, value=st.session_state.get(f"grp_{g}", True), key=f"grp_{g}")
-            if checked: selected_groups.append(g)
-        search = st.text_input("공종명 검색", placeholder="키워드 입력...")
+        # ── CP 상위 10개 테이블 ───────────────────────────────
+        st.markdown("#### 📋 CP 공종 상위 10개 (노무비 기준)")
+        st.caption("운반·사토·수압시험·CCTV·포장절단 등 비CP 공종 자동 제외")
 
-    with mid:
-        st.markdown("#### 📋 주요공종 테이블")
-        sort_col = st.selectbox("정렬 기준", ["금액(억원)","노무비(억원)","수량"], index=0)
+        if len(df_cp) > 0:
+            df_cp_show = df_cp.copy()
+            df_cp_show["금액(억원)"]   = (df_cp_show["amount"]/1e8).round(2)
+            df_cp_show["노무비(억원)"] = (df_cp_show["labor"]/1e8).round(2)
+            df_cp_show["노무비율"]     = (df_cp_show["labor_ratio"]*100).round(1).astype(str) + "%"
+            df_cp_show["주야간"]       = df_cp_show["night"].map({True:"🌙야간",False:"☀️주간"})
+            df_cp_show["노무집약"]     = df_cp_show["labor_ratio"].apply(lambda x: "🔥" if x>=0.8 else "")
 
-        display_df = df_mw.copy()
-        if not show_day:   display_df = display_df[display_df["night"]==True]
-        if not show_night: display_df = display_df[display_df["night"]==False]
-        display_df = display_df[display_df["group"].isin(selected_groups)]
-        if search: display_df = display_df[display_df["name"].str.contains(search, na=False)]
+            # 노무비 상위 10개
+            top10_cp = df_cp_show.nlargest(10,"노무비(억원)").reset_index(drop=True)
+            top10_cp.index = top10_cp.index + 1  # 1부터 시작
 
-        display_df["금액(억원)"]  = (display_df["amount"]/1e8).round(1)
-        display_df["노무비(억원)"]= (display_df["labor"]/1e8).round(1)
-        display_df["주야간"]      = display_df["night"].map({True:"🌙야간",False:"☀️주간"})
-        display_df["노무집약"]    = display_df["labor_ratio"].apply(lambda x: "🔥" if x>=0.8 else "")
+            show_top10 = top10_cp[["cp_group","name","spec","qty","unit","금액(억원)","노무비(억원)","노무비율","주야간","노무집약"]].copy()
+            show_top10.columns = ["CP그룹","공종명","규격","수량","단위","금액(억원)","노무비(억원)","노무비율","주야간","노무집약"]
 
-        sort_map = {"금액(억원)":"금액(억원)","노무비(억원)":"노무비(억원)","수량":"qty"}
-        display_df = display_df.sort_values(sort_map[sort_col], ascending=False).reset_index(drop=True)
+            # CP 순서별 색상 강조
+            cp_color_map = {cp["대공종"]: cp["color"] for cp in CP_DEFINITION}
 
-        show_df = display_df[["no","group","name","spec","qty","unit","금액(억원)","노무비(억원)","주야간","노무집약"]].copy()
-        show_df.columns = ["No","공종그룹","공종명","규격","수량","단위","금액(억원)","노무비(억원)","주야간","노무집약"]
+            def hl_cp(row):
+                grp = row["CP그룹"]
+                color = cp_color_map.get(grp, "#333")
+                return [f"border-left: 4px solid {color}"] + [""]*( len(row)-1)
 
-        PAGE_SIZE = 30
-        total_pages = max(1, math.ceil(len(show_df)/PAGE_SIZE))
-        page = st.number_input("페이지", min_value=1, max_value=total_pages, value=1, step=1)
-        paged_df = show_df.iloc[(page-1)*PAGE_SIZE : page*PAGE_SIZE]
+            st.dataframe(
+                show_top10.style.apply(hl_cp, axis=1),
+                hide_index=False,
+                use_container_width=True,
+                height=380
+            )
 
-        top10_idx = set(display_df.nlargest(10,"금액(억원)").index)
-        def hl_tab3(row):
-            return ["background-color:#3a3000;color:#FFD700"]*len(row) if row.name in top10_idx else [""]*len(row)
-
-        st.dataframe(paged_df.style.apply(hl_tab3, axis=1),
-                     hide_index=True, use_container_width=True, height=500)
-        st.caption(f"총 {len(show_df)}건 | {page}/{total_pages}페이지 | 🟡 금액 상위 10개 강조")
-
-    with right:
-        st.markdown("#### 🥧 공종그룹별 금액")
-        grp_sum = df_mw.groupby("group")["amount"].sum().reset_index()
-        fig_donut = go.Figure(go.Pie(
-            labels=grp_sum["group"], values=grp_sum["amount"],
-            hole=0.5, textinfo="label+percent", textfont_size=10,
-        ))
-        fig_donut.update_layout(height=280, margin=dict(l=0,r=0,t=10,b=0), showlegend=False)
-        st.plotly_chart(fig_donut, use_container_width=True)
-
-        st.markdown("---")
-        st.markdown("#### 🔴 크리티컬패스 후보")
-        top5 = df_mw.nlargest(5,"labor")[["no","group","name","labor"]]
-        st.markdown("**노무비 상위 5개**")
-        for _,r in top5.iterrows():
-            st.markdown(f"- `{r['no']}` {r['name'][:15]}… **{fmt_억(r['labor'])}**")
-        st.markdown("**필수 선후행 순서**")
-        for i,g in enumerate(["굴착공","관부설공","맨홀공","되메우기공","포장복구공"]):
-            st.markdown(f"{'→ ' if i>0 else ''}**{g}**")
-
-        st.markdown("---")
-        st.markdown("**예상 공기 계산**")
-        for _,r in df_mw[df_mw["group"].isin(["굴착공","관부설공","맨홀공"])].iterrows():
-            조수 = st.number_input(f"{r['name'][:12]}… 조수", min_value=1, max_value=30, value=4, key=f"cp_{r['no']}")
-            days_est = math.ceil((r["labor"]/180000)/조수)
-            st.caption(f"  예상 공기: 약 {days_est}일")
+            # ── 비CP 제외 목록 ────────────────────────────────
+            with st.expander(f"⬜ 비CP 제외 공종 ({len(df_non_cp)}건) — 운반·수압시험 등"):
+                if len(df_non_cp) > 0:
+                    df_non_show = df_non_cp[["group","name","spec","qty","unit"]].copy()
+                    df_non_show.columns = ["공종그
 
 # ═══════════════════════════════════════════════════════════════
 # TAB 4: 비작업일수 계산기
