@@ -188,7 +188,12 @@ def parse_by_keyword(file):
         if not row or len(row) <= name_col:
             continue
         name = str(row[name_col]).strip() if row[name_col] else ""
-        if not name or name in ["None","합계","소계","계",""]:
+        if not name or name in ["None","합계","소계","계","None",""]:
+            continue
+
+        # 단위가 "식"이거나 수량이 1.0이고 단위가 식인 경우 제외
+        unit_val = str(row[unit_col]).strip() if unit_col < len(row) and row[unit_col] else ""
+        if unit_val in ["식","1식","LS","ls","LOT","lot"]:
             continue
 
         group = map_group_detail(name)
