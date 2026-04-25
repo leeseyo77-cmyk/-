@@ -237,7 +237,28 @@ def parse_by_keyword(file):
             "labor": labor, "is_night": "-야간" in name,
         })
     wb.close()
-    return results, col_info
+
+    # ── 같은 공종명(group+name 기준) 물량 합산 ───────────────
+    merged = {}
+    for r in results:
+        key = (r["group"], r["name"].split("(")[0].strip())  # 규격 괄호 앞 공종명 기준
+        if key not in merged:
+            merged[key] = {
+                "group":    r["group"],
+                "name":     r["name"].split("(")[0].strip(),
+                "spec":     "규격 합산",
+                "qty":      r["qty"] if r["qty"] else 0.0,
+                "unit":     r["unit"],
+                "amount":   r["amount"] if r["amount"] else 0.0,
+                "labor":    r["labor"] if r["labor"] else 0.0,
+                "is_night": r["is_night"],
+            }
+        else:
+            merged[key]["qty"]    = (merged[key]["qty"]    or 0) + (r["qty"]    or 0)
+            merged[key]["amount"] = (merged[key]["amount"] or 0) + (r["amount"] or 0)
+            merged[key]["labor"]  = (merged[key]["labor"]  or 0) + (r["labor"]  or 0)
+
+    return list(merged.values()), col_info
 
 # ── 사이드바 ──────────────────────────────────────────────────
 st.sidebar.header("기본 설정")
