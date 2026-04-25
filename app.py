@@ -242,61 +242,193 @@ with tab1:
 # ═══════════════════════════════════════════════════════════════
 with tab2:
     st.subheader("엑셀 내역서 자동 인식")
-    uploaded = st.file_uploader("엑셀 파일 업로드 (.xlsx)", type=["xlsx","xls"])
+    st.caption("내역서 엑셀 파일을 업로드하면 주요공정(No. 표시)을 자동으로 추출합니다.")
+
+    # ── 키워드 매핑 ───────────────────────────────────────────
+    KEYWORD_MAP_DETAIL = {
+        '굴착공':   ['터파기','굴착'],
+        '토사운반': ['운반-토사','운반-풍화암','사토','소운반'],
+        '관부설공': ['관 부설','관부설','PE다중벽관','고강성PVC','주철관접합','GRP관','유리섬유복합관'],
+        '되메우기': ['되메우기','모래,관기초'],
+        '포장복구': ['아스팔트기층','아스팔트표층','콘크리트 표층','보조기층','포장절단','텍코팅','프라임코팅','미끄럼방지포장'],
+        '맨홀공':   ['맨홀','GRP5호맨홀','PC맨홀','공기변실','이토변실','유량계실'],
+        '시공검사': ['수압시험','CCTV','수밀시험'],
+        '가시설공': ['가시설','안전난간','흙막이','줄파기'],
+        '교통관리': ['교통정리','신호수'],
+        '지장물':   ['지장물보호'],
+        '부대공':   ['물푸기','관로경고테이프','표시못','품질관리'],
+    }
+
+    def map_group_detail(name):
+        for group, keywords in KEYWORD_MAP_DETAIL.items():
+            if any(kw in name for kw in keywords):
+                return group
+        return '기타'
+
+    # ── 파싱 함수 ─────────────────────────────────────────────
+    def parse_naeyeokseo(file):
+        import openpyxl
+        wb = openpyxl.load_workbook(file, read_only=True, data_only=True)
+
+        # 시트명 자동 탐색 ('내역서' 우선, 없으면 첫 번째 시트)
+        if '내역서' in wb.sheetnames:
+            ws = wb['내역서']
+        else:
+            ws = wb[wb.sheetnames[0]]
+
+        results = []
+        for row in ws.iter_rows(min_row=3, values_only=True):
+            if not row or len(row) < 4:
+                continue
+
+            name = str(row[0]).strip() if row[0] else ''
+            if not name or name == 'None':
+                continue
+
+            # col12: 비고 (No. 표시)
+            bigo = str(row[12]).strip() if len(row) > 12 and row[12] else ''
+            is_major = bigo.startswith('No.')
+
+            qty    = row[2] if isinstance(row[2], (int, float)) else None
+            amount = row[5] if len(row) > 5  and isinstance(row[5],  (int, float)) else None
+            labor  = row[9] if len(row) > 9  and isinstance(row[9],  (int, float)) else None
+
+            # 계층 레벨 판단
+            if name.startswith('◈'):   level = 1
+            elif name.startswith('▣'): level = 2
+            elif name.startswith('■'): level = 3
+            elif name.strip() and name.strip()[0].isdigit() and '.' in name[:3]: level = 4
+            else: level = 5
+
+            results.append({
+                'no_mark':  bigo,
+                'is_major': is_major,
+                'level':    level,
+                'name':     name,
+                'spec':     str(row[1]).strip() if row[1] else '',
+                'qty':      qty,
+                'unit':     str(row[3]).strip() if row[3] else '',
+                'amount':   amount,
+                'labor':    labor,
+                'is_night': '-야간' in name,
+            })
+
+        wb.close()
+        return results, ws, wb.sheetnames
+
+    def get_preview_rows(file):
+        """파싱 실패 시 첫 3행 미리보기"""
+        import openpyxl
+        wb = openpyxl.load_workbook(file, read_only=True, data_only=True)
+        ws = wb[wb.sheetnames[0]]
+        rows = []
+        for row in ws.iter_rows(min_row=1, max_row=3, values_only=True):
+            rows.append([str(c)[:20] if c is not None else '' for c in list(row)[:15]])
+        wb.close()
+        return rows
+
+    # ── 파일 업로드 ───────────────────────────────────────────
+    uploaded = st.file_uploader("내역서 엑셀 파일 업로드 (.xlsx)", type=["xlsx","xls"])
+
     if uploaded:
         try:
-            xl = pd.read_excel(uploaded, header=None)
-            COL_CANDS = ["공종명","품명","공종","작업명","명칭"]
-            UNIT_CANDS = ["단위","규격단위"]
-            QTY_CANDS  = ["물량","수량","규격수량"]
-            header_row=name_col=unit_col=qty_col=None
-            for i,row in xl.iterrows():
-                for j,cell in enumerate(row):
-                    if str(cell).strip() in COL_CANDS: header_row=i; name_col=j
-                    if str(cell).strip() in UNIT_CANDS and header_row==i: unit_col=j
-                    if str(cell).strip() in QTY_CANDS  and header_row==i: qty_col=j
-                if header_row is not None: break
-            if header_row is None:
-                st.error("공종명 컬럼을 찾지 못했습니다.")
+            all_rows, ws, sheet_names = parse_naeyeokseo(uploaded)
+
+            # 주요공정만 필터
+            major_works = [r for r in all_rows if r['is_major'] and r['qty'] is not None]
+
+            if not major_works:
+                st.warning(f"주요공정(No. 표시)을 찾지 못했습니다. 비고 컬럼(col12)에 'No.숫자' 형식이 있는지 확인해주세요.")
+                st.markdown(f"**감지된 시트 목록:** {sheet_names}")
+                st.markdown("**전체 파싱된 행 수:** " + str(len(all_rows)))
+
+                # 전체 행 샘플 10개 표시
+                if all_rows:
+                    st.markdown("**파싱 샘플 (상위 10행):**")
+                    sample_df = pd.DataFrame(all_rows[:10])[['level','name','qty','unit','amount','no_mark']]
+                    st.dataframe(sample_df, hide_index=True, use_container_width=True)
             else:
-                data=xl.iloc[header_row+1:].reset_index(drop=True)
-                data.columns=range(len(data.columns))
-                matched=[]; unmatched=[]
-                for _,row in data.iterrows():
-                    cell_val=str(row[name_col]).strip() if name_col is not None else ""
-                    if not cell_val or cell_val=="nan": continue
-                    unit_val=str(row[unit_col]).strip() if unit_col is not None and unit_col<len(row) else "-"
-                    try: qty_val=float(row[qty_col]) if qty_col is not None else 0.0
-                    except: qty_val=0.0
-                    mapped=next((g for g,kws in KEYWORD_MAP.items() if any(k in cell_val for k in kws)),None)
-                    (matched if mapped else unmatched).append({"공종명":cell_val,"단위":unit_val,"물량":qty_val,"매핑공종":mapped or ""})
+                # 공종그룹 매핑 추가
+                for r in major_works:
+                    r['group'] = map_group_detail(r['name'])
 
-                st.markdown(f"**✅ 매핑 {len(matched)}건 | ⚠️ 미인식 {len(unmatched)}건**")
-                if matched:
-                    st.markdown("#### ✅ 자동 매핑")
-                    st.dataframe(pd.DataFrame(matched).style.applymap(lambda _:"background-color:#1a3a2a;color:#4CAF50"),
-                                 hide_index=True,use_container_width=True)
-                if unmatched:
-                    st.markdown("#### ⚠️ 미인식 항목")
-                    공종목록=["(선택안함)","준비공","굴착공","관부설공","되메우기공","포장복구공","맨홀공","기타"]
-                    for idx,item in enumerate(unmatched):
-                        ca,cb,cc,cd=st.columns([3,1,1,2])
-                        ca.markdown(f"<span style='color:#FFA500'>{item['공종명']}</span>",unsafe_allow_html=True)
-                        cb.write(item['단위']); cc.write(item['물량'])
-                        sel=cd.selectbox("공종",공종목록,key=f"u_{idx}")
-                        if sel!="(선택안함)": matched.append({**item,"매핑공종":sel})
-                if st.button("✅ 물량을 공기산정에 적용"):
-                    qm={"준비공":0,"굴착공":0,"관부설공":0,"되메우기공":0,"포장복구공":0}
-                    for item in matched:
-                        if item["매핑공종"] in qm: qm[item["매핑공종"]]+=item["물량"]
-                    st.session_state.update({"q_준비":qm["준비공"],"q_터파기":qm["굴착공"],
-                                             "q_관부설":qm["관부설공"],"q_되메우기":qm["되메우기공"],"q_포장":qm["포장복구공"]})
-                    st.success("공기산정 탭으로 이동하면 물량이 반영됩니다!")
+                df_parsed = pd.DataFrame(major_works)
+                df_parsed['금액(억원)']  = (df_parsed['amount'].fillna(0) / 1e8).round(2)
+                df_parsed['노무비(억원)'] = (df_parsed['labor'].fillna(0) / 1e8).round(2)
+                df_parsed['주야간']       = df_parsed['is_night'].map({True:'🌙야간', False:'☀️주간'})
+                df_parsed = df_parsed.sort_values('금액(억원)', ascending=False).reset_index(drop=True)
+
+                # 요약
+                st.success(f"✅ 주요공정 **{len(major_works)}건** 파싱 완료 | 전체 시트: {sheet_names}")
+                ca, cb, cc, cd = st.columns(4)
+                ca.metric("파싱된 주요공정", f"{len(major_works)}건")
+                cb.metric("총 금액",         f"{df_parsed['금액(억원)'].sum():.1f}억")
+                cc.metric("총 노무비",        f"{df_parsed['노무비(억원)'].sum():.1f}억")
+                cd.metric("야간공종",         f"{df_parsed['is_night'].sum()}건")
+
+                st.markdown("---")
+
+                # 공종그룹 필터
+                all_groups = df_parsed['group'].unique().tolist()
+                selected = st.multiselect("공종그룹 필터", all_groups, default=all_groups)
+                show_night = st.checkbox("야간공종 포함", value=True)
+
+                filtered = df_parsed[df_parsed['group'].isin(selected)]
+                if not show_night:
+                    filtered = filtered[filtered['is_night']==False]
+
+                # 테이블 표시
+                show_cols = ['no_mark','group','name','spec','qty','unit','금액(억원)','노무비(억원)','주야간']
+                show_df = filtered[show_cols].copy()
+                show_df.columns = ['No','공종그룹','공종명','규격','수량','단위','금액(억원)','노무비(억원)','주야간']
+
+                # 금액 상위 10개 강조
+                top10 = set(filtered.nlargest(10,'금액(억원)').index)
+                def hl(row):
+                    if row.name in top10:
+                        return ['background-color:#3a3000;color:#FFD700']*len(row)
+                    return ['']*len(row)
+
+                st.dataframe(
+                    show_df.style.apply(hl, axis=1),
+                    hide_index=True,
+                    use_container_width=True,
+                    height=500
+                )
+
+                # 공기산정 적용 버튼
+                st.markdown("---")
+                if st.button("✅ 파싱 물량을 공기산정에 적용"):
+                    grp_qty = df_parsed.groupby('group')['qty'].sum()
+                    st.session_state['q_준비']     = float(grp_qty.get('가시설공', 5.0))
+                    st.session_state['q_터파기']   = float(grp_qty.get('굴착공', 350.0))
+                    st.session_state['q_관부설']   = float(grp_qty.get('관부설공', 120.0))
+                    st.session_state['q_되메우기'] = float(grp_qty.get('되메우기', 180.0))
+                    st.session_state['q_포장']     = float(grp_qty.get('포장복구', 60.0))
+                    st.success("✅ 공기산정 탭으로 이동하면 물량이 반영되어 있습니다!")
+
         except Exception as e:
-            st.error(f"파일 읽기 오류: {e}")
+            st.error(f"파싱 오류: {e}")
+            st.markdown("---")
+            st.markdown("**🔍 파일 구조 확인 (첫 3행)**")
+            st.caption("아래 데이터를 보고 컬럼 구조를 확인해주세요.")
+            try:
+                preview = get_preview_rows(uploaded)
+                preview_df = pd.DataFrame(preview, index=["1행","2행","3행"])
+                preview_df.columns = [f"col{i}" for i in range(len(preview_df.columns))]
+                st.dataframe(preview_df, use_container_width=True)
+                st.info("col0=공종명, col2=수량, col3=단위, col5=금액합계, col9=노무비, col12=비고(No.) 형식이 맞는지 확인해주세요.")
+            except Exception as e2:
+                st.error(f"미리보기도 실패: {e2}")
     else:
-        st.info("엑셀 파일을 업로드해주세요.")
-
+        st.info("내역서 엑셀 파일을 업로드해주세요.")
+        st.markdown("""
+        **파일 요구사항:**
+        - 시트명: `내역서` (없으면 첫 번째 시트 자동 선택)
+        - 3행부터 데이터 시작
+        - col0=공종명, col2=수량, col3=단위, col5=금액합계, col9=노무비, col12=비고(No.숫자)
+        """)
+        
 # ═══════════════════════════════════════════════════════════════
 # TAB 3: 주요공종 분석
 # ═══════════════════════════════════════════════════════════════
