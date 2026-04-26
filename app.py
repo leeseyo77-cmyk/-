@@ -172,85 +172,141 @@ def fmt_ok(val):
 
 def parse_by_keyword(file):
     wb = openpyxl.load_workbook(file, read_only=True, data_only=True)
+
+    # ── 시트 자동 선택 ────────────────────────────────────────
     target_sheet = None
-    for sname in wb.sheetnames:
-        if "내역" in sname or "공종" in sname:
-            target_sheet = sname
+    priority = ["설계내역서", "내역서", "공사비내역서"]
+    for p in priority:
+        if p in wb.sheetnames:
+            target_sheet = p
             break
     if not target_sheet:
+        for sname in wb.sheetnames:
+            if "내역" in sname:
+                target_sheet = sname
+                break
+    if not target_sheet:
         target_sheet = wb.sheetnames[0]
+
     ws = wb[target_sheet]
     all_rows = list(ws.iter_rows(values_only=True))
+
+    # ── 컬럼 구조 자동 탐색 ──────────────────────────────────
     header_row_idx = None
-    name_col = qty_col = unit_col = None
-    for i, row in enumerate(all_rows):
+    name_col    = 1   # 기본값: col1=명칭
+    qty_col     = 3   # 기본값: col3=수량
+    unit_col    = 4   # 기본값: col4=단위
+    amount_col  = 6   # 기본값: col6=합계금액
+    labor_col   = 8   # 기본값: col8=노무비금액
+
+    for i, row in enumerate(all_rows[:10]):
         row_strs = [str(c).strip() if c else "" for c in row]
+        # 헤더 행 탐색
         for j, cell in enumerate(row_strs):
-            if cell in ["공종명","품명","공종","작업명","명칭"]:
+            if cell in ["명      칭", "명칭", "공종명", "품명", "작업명"]:
                 header_row_idx = i
                 name_col = j
+            if cell in ["수   량", "수량", "물량"]:
+                qty_col = j
+            if cell in ["단위", "규격단위"]:
+                unit_col = j
         if header_row_idx is not None:
-            row_strs = [str(c).strip() if c else "" for c in all_rows[header_row_idx]]
-            for j, cell in enumerate(row_strs):
-                if cell in ["수량","물량"]:     qty_col  = j
-                if cell in ["단위","규격단위"]: unit_col = j
             break
-    if name_col is None:  name_col  = 0
-    if qty_col is None:   qty_col   = 2
-    if unit_col is None:  unit_col  = 3
-    amount_col = 5
-    labor_col  = 9
+
+    # 서브헤더에서 금액/노무비 컬럼 탐색
     if header_row_idx is not None and header_row_idx+1 < len(all_rows):
-        sub_row = [str(c).strip() if c else "" for c in all_rows[header_row_idx+1]]
-        amt_candidates = [j for j,c in enumerate(sub_row) if c == "금액"]
-        if len(amt_candidates) >= 1: amount_col = amt_candidates[0]
-        if len(amt_candidates) >= 3: labor_col  = amt_candidates[2]
-    data_start = (header_row_idx + 2) if header_row_idx is not None else 3
+        sub = [str(c).strip() if c else "" for c in all_rows[header_row_idx+1]]
+        amt_cols = [j for j,c in enumerate(sub) if c == "금    액" or c == "금액"]
+        if len(amt_cols) >= 1: amount_col = amt_cols[0]
+        if len(amt_cols) >= 2: labor_col  = amt_cols[1]
+
+    data_start = (header_row_idx + 2) if header_row_idx is not None else 4
+
     col_info = {
-        "시트명": target_sheet, "헤더행": header_row_idx,
-        "공종명컬럼": name_col, "수량컬럼": qty_col,
-        "단위컬럼": unit_col, "금액컬럼": amount_col,
-        "노무비컬럼": labor_col, "데이터시작행": data_start,
+        "시트명": target_sheet,
+        "헤더행": header_row_idx,
+        "명칭컬럼": name_col,
+        "수량컬럼": qty_col,
+        "단위컬럼": unit_col,
+        "금액컬럼": amount_col,
+        "노무비컬럼": labor_col,
+        "데이터시작행": data_start,
     }
+
+    # ── 데이터 파싱 ──────────────────────────────────────────
     results = []
     for row in all_rows[data_start:]:
         if not row or len(row) <= name_col:
             continue
+
         name = str(row[name_col]).strip() if row[name_col] else ""
-        if not name or name in ["None","합계","소계","계",""]:
+        if not name or name in ["None","합계","소계","계","순공사비",""]:
             continue
-        unit_val = str(row[unit_col]).strip() if unit_col < len(row) and row[unit_col] else ""
-        if unit_val in ["식","1식","LS","ls","LOT","lot"]:
+        # 계층 구분자 제외 (Ⅰ, Ⅱ, 1., 1.1, 1.1.1 등)
+        import re
+        code = str(row[0]).strip() if row[0] else ""
+        # col0이 로마자(Ⅰ~Ⅷ) 또는 숫자코드(1., 1.1, 1.1.1)면 소계행이므로 제외
+        if re.match(r'^[ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩ]', code):
             continue
-        group = map_group_detail(name)
-        try:    qty = float(row[qty_col]) if qty_col < len(row) and row[qty_col] else None
-        except: qty = None
+        if re.match(r'^\d+(\.\d+)*\.?\s*$', code):
+            continue
+        # 명칭이 지구명이거나 관로구간명인 경우 제외
+        skip_names = ["남천지구","동부지구","신설오수관로","간선관로","지선관로",
+                      "순공사비","배수설비공사","토공","관로공","구조물공","포장공",
+                      "추진공","부대공","안전관리비","환경보전비"]
+        if any(sk in name for sk in skip_names) and qty is None:
+            continue
+
+        # 1식 제외
         unit = str(row[unit_col]).strip() if unit_col < len(row) and row[unit_col] else ""
-        try:    amount = float(row[amount_col]) if amount_col < len(row) and row[amount_col] else None
+        if unit in ["식","1식","LS","ls","LOT","lot"]:
+            continue
+
+        # 수량
+        try:    qty = float(row[qty_col]) if qty_col < len(row) and isinstance(row[qty_col], (int,float)) else None
+        except: qty = None
+
+        # 금액
+        try:    amount = float(row[amount_col]) if amount_col < len(row) and isinstance(row[amount_col], (int,float)) else None
         except: amount = None
-        try:    labor = float(row[labor_col]) if labor_col < len(row) and row[labor_col] else None
+
+        # 노무비
+        try:    labor = float(row[labor_col]) if labor_col < len(row) and isinstance(row[labor_col], (int,float)) else None
         except: labor = None
-        spec = str(row[1]).strip() if len(row) > 1 and row[1] else ""
+
+        # 노무비 0인 항목 제외 (재료비만인 항목)
+        if labor is not None and labor == 0 and amount is not None and amount > 0:
+            continue
+
+        spec = str(row[2]).strip() if len(row) > 2 and row[2] else ""
+        group = map_group_detail(name)
+
         results.append({
-            "group": group, "name": name, "spec": spec,
-            "qty": qty, "unit": unit, "amount": amount,
-            "labor": labor, "is_night": "-야간" in name,
+            "group":    group,
+            "name":     name,
+            "spec":     spec,
+            "qty":      qty,
+            "unit":     unit,
+            "amount":   amount,
+            "labor":    labor,
+            "is_night": "-야간" in name,
         })
+
     wb.close()
 
-    # ── 같은 공종명(group+name 기준) 물량 합산 ───────────────
+    # ── 같은 공종명 물량 합산 ────────────────────────────────
     merged = {}
     for r in results:
-        key = (r["group"], r["name"].split("(")[0].strip())  # 규격 괄호 앞 공종명 기준
+        key = (r["group"], r["name"].split("(")[0].strip())
         if key not in merged:
             merged[key] = {
                 "group":    r["group"],
                 "name":     r["name"].split("(")[0].strip(),
                 "spec":     "규격 합산",
-                "qty":      r["qty"] if r["qty"] else 0.0,
+                "qty":      r["qty"] or 0.0,
                 "unit":     r["unit"],
-                "amount":   r["amount"] if r["amount"] else 0.0,
-                "labor":    r["labor"] if r["labor"] else 0.0,
+                "amount":   r["amount"] or 0.0,
+                "labor":    r["labor"] or 0.0,
                 "is_night": r["is_night"],
             }
         else:
@@ -258,7 +314,7 @@ def parse_by_keyword(file):
             merged[key]["amount"] = (merged[key]["amount"] or 0) + (r["amount"] or 0)
             merged[key]["labor"]  = (merged[key]["labor"]  or 0) + (r["labor"]  or 0)
 
-    return list(merged.values()), col_info
+    return list(merged.values()), col_infos
 
 # ── 사이드바 ──────────────────────────────────────────────────
 st.sidebar.header("기본 설정")
