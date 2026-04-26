@@ -2,10 +2,12 @@ import streamlit as st
 import pandas as pd
 import math
 import holidays
+import re
+import openpyxl
 from datetime import date, timedelta
 import plotly.express as px
 import plotly.graph_objects as go
-import openpyxl
+
 
 st.set_page_config(page_title="상하수도 공기산정", layout="wide")
 
@@ -243,7 +245,6 @@ def parse_by_keyword(file):
         if not name or name in ["None","합계","소계","계","순공사비",""]:
             continue
         # 계층 구분자 제외 (Ⅰ, Ⅱ, 1., 1.1, 1.1.1 등)
-        import re
         code = str(row[0]).strip() if row[0] else ""
         # col0이 로마자(Ⅰ~Ⅷ) 또는 숫자코드(1., 1.1, 1.1.1)면 소계행이므로 제외
         if re.match(r'^[ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩ]', code):
