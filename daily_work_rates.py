@@ -90,9 +90,9 @@ DAILY_WORK = {
     "콘크리트포장깨기":     {"daily":54,   "unit":"㎥",  "crews":5, "hours":8, "condition":"B.H0.7㎥+대형브레이카"},
 
     # ── 되메우기·모래기초 ─────────────────────────────────────
-    "되메우기_관상단_토사": {"daily":79,   "unit":"㎥",  "crews":5, "hours":8, "condition":"B/H+진동롤러"},
-    "되메우기_관주위_토사": {"daily":42,   "unit":"㎥",  "crews":5, "hours":8, "condition":"B/H+램머"},
-    "모래부설다짐":         {"daily":79,   "unit":"㎥",  "crews":5, "hours":8, "condition":"물다짐"},
+    "되메우기_관상단_토사": {"daily":316,  "unit":"㎥", "crews":1, "hours":8, "condition":"B/H 0.7㎥+진동롤러, 굴착기1대기준"},
+    "되메우기_관주위_토사": {"daily":168,  "unit":"㎥", "crews":1, "hours":8, "condition":"B/H 0.7㎥+램머, 굴착기1대기준"},
+    "모래부설다짐":         {"daily":316,  "unit":"㎥", "crews":1, "hours":8, "condition":"물다짐, 굴착기1대기준"},
 
     # ── 관 부설 (PE다중벽관/고강성PVC) ────────────────────────
     "PE관_D150":  {"daily":7,  "unit":"개소","crews":3,"hours":8,"condition":"D150mm×6.0m"},

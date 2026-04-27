@@ -717,10 +717,10 @@ with tab2:
                         wd_info = calc_work_days(item_name, item_spec, item_qty, crews=wrk)
                         if wd_info:
                             # 터파기: 조수 = 굴착기 대수 → 1일작업량 × 조수
-                            if any(kw in item_name for kw in ["터파기","굴착"]):
-                                base_daily = wd_info.get("daily", 300)
-                                adjusted_days = item_qty / (base_daily * wrk) if base_daily*wrk > 0 else 0
-                                days_from_wd += math.ceil(adjusted_days)
+                           if any(kw in item_name for kw in ["터파기","굴착","되메우기","모래기초","모래부설"]):
+                            base_daily = wd_info.get("daily", 300)
+                            adjusted_days = item_qty / (base_daily * wrk) if base_daily*wrk > 0 else 0
+                            days_from_wd += math.ceil(adjusted_days)
                             else:
                                 days_from_wd += wd_info.get("work_days_ceil", 0)
 
