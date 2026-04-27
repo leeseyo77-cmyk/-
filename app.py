@@ -288,7 +288,18 @@ def apply_labor_rate(item):
     spec = item.get("spec","")
     qty  = item.get("qty") or 0
 
-    # 1일 작업량 기반 작업일수
+    # 기본값 초기화
+    item.setdefault("manday", 0)
+    item.setdefault("labor_rate", None)
+    item.setdefault("labor_unit", "")
+    item.setdefault("soil_info", "")
+    item.setdefault("work_days", 0)
+    item.setdefault("daily_prod", "")
+    item.setdefault("crews", 0)
+    item.setdefault("work_key", "")
+    item.setdefault("condition", "")
+
+    # ── 1일 작업량 기반 작업일수 (가이드라인 부록1,2) ──────────
     wd = calc_work_days(name, spec, qty)
     if wd:
         item["work_days"]  = wd["work_days_ceil"]
@@ -296,19 +307,10 @@ def apply_labor_rate(item):
         item["crews"]      = wd["crews"]
         item["work_key"]   = wd["key"]
         item["condition"]  = wd["condition"]
-    else:
-        item["work_days"]  = 0
-        item["daily_prod"] = ""
-        item["crews"]      = 0
-        item["work_key"]   = ""
-        item["condition"]  = ""
 
-    # 표준품셈 Man-day
-    item.setdefault("manday", 0)
-    item.setdefault("labor_rate", None)
-    item.setdefault("labor_unit", "")
-    item.setdefault("soil_info", "")
+    # ── 표준품셈 Man-day 계산 ────────────────────────────────
 
+    # 1. 터파기 (토질별)
     if any(kw in name for kw in ["터파기","굴착","줄파기"]) and "운반" not in name:
         info = get_excavation_labor_detail(spec)
         rate = info.get("인/m3")
@@ -317,7 +319,9 @@ def apply_labor_rate(item):
             item["labor_rate"] = rate
             item["labor_unit"] = "인/m3"
             item["soil_info"]  = f"{info['토질']}{' '+'/'.join(info['보정조건']) if info['보정조건'] else ''}"
+        return item
 
+    # 2. 관 부설 (관종·관경별)
     pipe_kws = ["관 부설","관부설","이중벽관","주철관","흄관","콘크리트관",
                 "GRP관","유리섬유복합관","파형강관","PE다중벽","고강성PVC","강관부설"]
     if any(kw in name for kw in pipe_kws):
@@ -333,7 +337,17 @@ def apply_labor_rate(item):
                     item["soil_info"]  = f"D={dia}mm"
             except Exception:
                 pass
-    return item
+        return item
+
+    # 3. 맨홀 설치 (노무비 역산)
+    if any(kw in name for kw in ["맨홀"]):
+        labor = item.get("labor") or 0
+        if labor > 0 and qty > 0:
+            # 노무비 ÷ 일노무단가(200,000원) = Man-day
+            item["manday"]     = round(labor / 200000, 1)
+            item["labor_rate"] = round(labor / qty / 200000, 4)
+            item["labor_unit"] = "인/개소"
+            item["soil_info"]  = "노무비 역산"
 
 SKIP_NAMES = [
     "남천지구","동부지구","신설오수관로","간선관로","지선관로",
