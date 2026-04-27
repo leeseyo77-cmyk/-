@@ -701,20 +701,36 @@ with tab2:
                     md   = md_summary.get(grp,0)
                     wrk  = crew.get(grp,3)
                     days_from_md = math.ceil(md/wrk) if md>0 else 0
-                    final_days   = int(round(wd)) if wd>0 else days_from_md
+
+                    # 작업일수 = 물량 ÷ (1일작업량 × 투입조수)
+                    # wd_summary는 기본조수로 계산된 값 → 조수 반영해서 재계산
+                    grp_items = [r for r in matched if r.get("group")==grp]
+
+                    # 1일작업량 기준 재계산
+                    days_from_wd = 0
+                    daily_repr = "-"
+                    for item in grp_items:
+                        item_qty  = item.get("qty") or 0
+                        item_name = item.get("name","")
+                        item_spec = item.get("spec","")
+                        wd_info   = calc_work_days(item_name, item_spec, item_qty, crews=wrk)
+                        if wd_info:
+                            days_from_wd += wd_info.get("work_days_ceil", 0)
+                            if not daily_repr or daily_repr=="-":
+                                daily_repr = f"{wd_info.get('daily','')}{wd_info.get('unit','')}/일"
+
+                    final_days = int(days_from_wd) if days_from_wd > 0 else days_from_md
 
                     qty_val, unit_val = grp_qty_dict.get(grp,(0,""))
-                    grp_items = [r for r in matched if r.get("group")==grp]
-                    daily_repr = grp_items[0].get("daily_prod","") if grp_items else ""
 
                     result_rows.append({
                         "공종":       grp,
                         "물량":       f"{qty_val:,.0f}" if qty_val else "-",
                         "단위":       unit_val,
-                        "1일작업량":  daily_repr if daily_repr else "-",
+                        "1일작업량":  daily_repr,
                         "투입조수":   f"{wrk}조",
                         "작업일수(일)": final_days,
-                        "비고": "✅ 1일기준" if wd>0 else ("✅ Man-day" if md>0 else "⚠️ 없음"),
+                        "비고": "✅ 1일기준" if days_from_wd>0 else ("✅ Man-day" if md>0 else "⚠️ 없음"),
                     })
 
                 result_rows_sorted = sorted(result_rows, key=lambda x: -x["작업일수(일)"])
