@@ -284,82 +284,105 @@ def extract_diameter(spec_str):
     return None
 
 def apply_labor_rate(item):
-    name = item.get("name","")
-    spec = item.get("spec","")
-    qty  = item.get("qty") or 0
+    try:
+        name = str(item.get("name") or "")
+        spec = str(item.get("spec") or "")
+        qty  = float(item.get("qty") or 0)
 
-    # 기본값 초기화
-    item.setdefault("manday", 0)
-    item.setdefault("labor_rate", None)
-    item.setdefault("labor_unit", "")
-    item.setdefault("soil_info", "")
-    item.setdefault("work_days", 0)
-    item.setdefault("daily_prod", "")
-    item.setdefault("crews", 0)
-    item.setdefault("work_key", "")
-    item.setdefault("condition", "")
+        # 기본값 초기화
+        item.setdefault("manday", 0)
+        item.setdefault("labor_rate", None)
+        item.setdefault("labor_unit", "")
+        item.setdefault("soil_info", "")
+        item.setdefault("work_days", 0)
+        item.setdefault("daily_prod", "")
+        item.setdefault("crews", 0)
+        item.setdefault("work_key", "")
+        item.setdefault("condition", "")
 
-    # ── 1일 작업량 기반 작업일수 (가이드라인 부록1,2) ──────────
-    wd = calc_work_days(name, spec, qty)
-    if wd:
-        item["work_days"]  = wd["work_days_ceil"]
-        item["daily_prod"] = f"{wd['daily']}{wd['unit']}/일"
-        item["crews"]      = wd["crews"]
-        item["work_key"]   = wd["key"]
-        item["condition"]  = wd["condition"]
-
-    # ── 표준품셈 Man-day 계산 ────────────────────────────────
-
-    # 1. 터파기 (토질별)
-    if any(kw in name for kw in ["터파기","굴착","줄파기"]) and "운반" not in name:
-        info = get_excavation_labor_detail(spec)
-        rate = info.get("인/m3")
-        if rate and qty:
-            item["manday"]     = round(rate * qty, 1)
-            item["labor_rate"] = rate
-            item["labor_unit"] = "인/m3"
-            item["soil_info"]  = f"{info['토질']}{' '+'/'.join(info['보정조건']) if info['보정조건'] else ''}"
-        return item
-
-    # 2. 관 부설 (관종·관경별)
-# 2. 관 부설 (관종·관경별)
-    pipe_kws = ["관 부설","관부설","이중벽관","주철관","흄관","콘크리트관",
-                "GRP관","유리섬유복합관","파형강관","PE다중벽","고강성PVC","강관부설"]
-    if any(kw in name for kw in pipe_kws):
-        dia = extract_diameter(spec)
-        if dia:
-            try:
-                info = get_pipe_labor(name, dia, "A")
-                if info and isinstance(info, dict):
-                    rate = info.get("합계")
-                    if rate and qty:
-                        item["manday"]     = round(rate * qty, 1)
-                        item["labor_rate"] = rate
-                        item["labor_unit"] = "인/본"
-                        item["soil_info"]  = f"D={dia}mm"
-            except Exception:
-                # 품셈 없으면 노무비 역산으로 대체
-                labor = item.get("labor") or 0
-                if labor > 0 and qty > 0:
-                    item["manday"]     = round(labor / 200000, 1)
-                    item["soil_info"]  = "노무비 역산"
-        else:
-            # 관경 추출 실패시 노무비 역산
-            labor = item.get("labor") or 0
+        # 노무비 역산용 헬퍼
+        def labor_fallback(unit_str="인/개소"):
+            labor = float(item.get("labor") or 0)
             if labor > 0 and qty > 0:
-                item["manday"]     = round(labor / 200000, 1)
-                item["soil_info"]  = "노무비 역산"
-        return item
+                item["manday"]    = round(labor / 200000, 1)
+                item["soil_info"] = f"노무비역산({unit_str})"
 
-    # 3. 맨홀 설치 (노무비 역산)
-    if any(kw in name for kw in ["맨홀"]):
-        labor = item.get("labor") or 0
-        if labor > 0 and qty > 0:
-            # 노무비 ÷ 일노무단가(200,000원) = Man-day
-            item["manday"]     = round(labor / 200000, 1)
-            item["labor_rate"] = round(labor / qty / 200000, 4)
-            item["labor_unit"] = "인/개소"
-            item["soil_info"]  = "노무비 역산"
+        # 1일 작업량 기반 작업일수
+        try:
+            wd = calc_work_days(name, spec, qty)
+            if wd and isinstance(wd, dict):
+                item["work_days"]  = wd.get("work_days_ceil", 0)
+                item["daily_prod"] = f"{wd.get('daily','')}{wd.get('unit','')}/일"
+                item["crews"]      = wd.get("crews", 0)
+                item["work_key"]   = wd.get("key", "")
+                item["condition"]  = wd.get("condition", "")
+        except Exception:
+            pass
+
+        # 터파기
+        if any(kw in name for kw in ["터파기","굴착","줄파기"]) and "운반" not in name:
+            try:
+                info = get_excavation_labor_detail(spec)
+                if info and isinstance(info, dict):
+                    rate = info.get("인/m3")
+                    if rate and qty:
+                        item["manday"]     = round(float(rate) * qty, 1)
+                        item["labor_rate"] = rate
+                        item["labor_unit"] = "인/m3"
+                        item["soil_info"]  = f"{info.get('토질','')}"
+            except Exception:
+                labor_fallback("인/m3")
+            return item
+
+        # 관 부설
+        pipe_kws = ["관 부설","관부설","이중벽관","주철관","흄관","콘크리트관",
+                    "GRP관","유리섬유복합관","파형강관","PE다중벽","고강성PVC","강관부설"]
+        if any(kw in name for kw in pipe_kws):
+            try:
+                dia = extract_diameter(spec)
+                if dia:
+                    info = get_pipe_labor(name, dia, "A")
+                    if info and isinstance(info, dict):
+                        rate = info.get("합계")
+                        if rate and qty:
+                            item["manday"]     = round(float(rate) * qty, 1)
+                            item["labor_rate"] = rate
+                            item["labor_unit"] = "인/본"
+                            item["soil_info"]  = f"D={dia}mm"
+                else:
+                    labor_fallback("인/본")
+            except Exception:
+                labor_fallback("인/본")
+            return item
+
+        # 맨홀
+        if any(kw in name for kw in ["맨홀"]):
+            labor_fallback("인/개소")
+            return item
+
+        # 되메우기
+        if any(kw in name for kw in ["되메우기","모래기초","모래,관기초","모래부설"]):
+            labor_fallback("인/m3")
+            return item
+
+        # 포장복구
+        if any(kw in name for kw in ["아스팔트포장","아스콘포장","보조기층","콘크리트포장",
+                                      "포장복구","포장깨기","포장절단"]):
+            labor_fallback("인/m2")
+            return item
+
+        # 배수설비
+        if any(kw in name for kw in ["배수설비","오수받이","우수받이","연결관"]):
+            labor_fallback("인/개소")
+            return item
+
+        # 기타 공종
+        labor_fallback("인/일")
+
+    except Exception as e:
+        pass  # 오류나도 item 그대로 반환
+
+    return item
 
 SKIP_NAMES = [
     "남천지구","동부지구","신설오수관로","간선관로","지선관로",
