@@ -256,7 +256,7 @@ def calc_work_days(name: str, spec: str, qty: float,
             "width":         width,
         }
 
-    # ── 일반 공종 ─────────────────────────────────────────────
+   # ── 일반 공종 ─────────────────────────────────────────────
     key = get_work_key(name, spec)
     if not key:
         return None
@@ -266,7 +266,16 @@ def calc_work_days(name: str, spec: str, qty: float,
         info["crews"] = crews
 
     daily_total = info["daily"] * info["crews"]
-    work_days   = qty / daily_total if daily_total > 0 else 0
+    
+    # [수정] 내역서 단위(qty)와 가이드라인 단위(info["unit"]) 불일치 보정
+    # PE관 등 가이드라인 단위가 '개소(본)'이고 1본=6m 기준일 때, 내역서 물량이 'm'로 들어오면 수량을 6으로 나눔
+    adjusted_qty = qty
+    if info["unit"] in ["개소", "본"] and "6.0m" in info.get("condition", ""):
+        # 내역서 명칭이나 규격에 'm' 단위가 암시되어 있고, 값이 비정상적으로 크다면 연장(m)일 확률이 높음
+        # (완벽한 판단은 어렵지만, 보통 수십~수백 단위면 m일 확률이 큼)
+        adjusted_qty = qty / 6.0
+
+    work_days   = adjusted_qty / daily_total if daily_total > 0 else 0
 
     info["key"]            = key
     info["qty"]            = qty
