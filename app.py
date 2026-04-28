@@ -296,6 +296,9 @@ SKIP_NAMES = [
     "추진공","부대공","안전관리비","환경보전비","소계","합계","계",
 ]
 
+# 관부설 제외 항목 (절단, 이형관, 하차비는 작업일수 계산 제외)
+PIPE_EXCLUDE = ["절단","이형관","하차비","단관","마감캡","추진관"]
+
 def parse_by_keyword(file):
     wb = openpyxl.load_workbook(file, read_only=True, data_only=True)
     skip_sheets = ["목차","안내","INITIAL","초기","index"]
@@ -362,6 +365,11 @@ def parse_by_keyword(file):
         if (labor is None or labor==0) and amount is not None and amount>0: continue
         spec  = str(row[2]).strip() if len(row)>2 and row[2] else ""
         group = map_group_detail(name)
+
+        # 관부설공 중 절단·이형관·하차비는 작업일수 계산 불필요 → 기타로 분류
+        if group == "관부설공" and any(ex in name for ex in ["절단","이형관","하차비","단관","마감캡"]):
+            group = "기타"
+
         results.append({
             "group":group,"name":name,"spec":spec,
             "qty":qty,"unit":unit,"amount":amount,"labor":labor,
