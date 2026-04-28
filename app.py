@@ -682,21 +682,16 @@ with tab1:
 
         st.markdown("---")
         st.subheader("총 공사기간 산출")
-        st.caption("공사기간 = 준비기간 + 비작업일수 + 순작업일수 + 정리기간")
+        st.caption("💡 공사기간 = 준비기간 + 비작업일수 + 순작업일수 + 정리기간 (비작업일수 탭과 연동됨)")
 
-        col_a, col_b = st.columns(2)
-        with col_a:
-            t1_proj     = st.selectbox("공사 종류", list(PREP_PERIOD.keys()), index=0, key="t1_proj")
-            t1_prep     = st.number_input("준비기간 (일)", value=PREP_PERIOD.get(t1_proj,60), min_value=0, key="t1_prep")
-            t1_cleanup  = st.number_input("정리기간 (일)", value=20, min_value=0, key="t1_cleanup")
-        with col_b:
-            t1_city     = st.selectbox("공사 지역", CITY_LIST,
-                                       index=CITY_LIST.index("서울") if "서울" in CITY_LIST else 0,
-                                       key="t1_city")
-            t1_months   = st.number_input("작업 개월수", min_value=1, max_value=60, value=6, key="t1_months")
-            t1_year     = st.selectbox("착공 연도", list(range(2025,2034)), index=0, key="t1_year")
-            t1_month    = st.selectbox("착공 월", list(range(1,13)), index=0,
-                                       format_func=lambda x:f"{x}월", key="t1_month")
+        # 탭 4(비작업일수 계산기)에서 설정한 값을 그대로 물려받음
+        t1_proj   = st.session_state.sync_proj
+        t1_prep   = st.session_state.sync_prep
+        t1_cleanup= st.session_state.sync_clean
+        t1_city   = st.session_state.sync_city
+        t1_months = st.session_state.sync_months
+        t1_year   = st.session_state.sync_year
+        t1_month  = st.session_state.sync_month
 
         # 비작업일수 자동 계산
         t1_nonwork = 0.0
@@ -866,20 +861,19 @@ with tab4:
 
     col1,col2=st.columns(2)
     with col1:
-        proj_type       = st.selectbox("공사 종류",list(PREP_PERIOD.keys()),index=0)
-        start_year      = st.selectbox("착공 연도",list(range(2025,2034)),index=0)
-        start_month     = st.selectbox("착공 월",list(range(1,13)),index=0,format_func=lambda x:f"{x}월")
-        duration_months = st.number_input("작업 개월수",min_value=1,max_value=60,value=6)
-        city            = st.selectbox("공사 지역",CITY_LIST,
-                                       index=CITY_LIST.index("서울") if "서울" in CITY_LIST else 0)
+        proj_type       = st.selectbox("공사 종류",list(PREP_PERIOD.keys()), key="sync_proj")
+        start_year      = st.selectbox("착공 연도",list(range(2025,2034)), key="sync_year")
+        start_month     = st.selectbox("착공 월",list(range(1,13)),format_func=lambda x:f"{x}월", key="sync_month")
+        duration_months = st.number_input("작업 개월수",min_value=1,max_value=60, key="sync_months")
+        city            = st.selectbox("공사 지역",CITY_LIST, key="sync_city")
     with col2:
         st.markdown("**기상 조건**")
         use_rain=st.checkbox("강우 (5mm 이상)",value=True)
         use_cold=st.checkbox("동절기 (0도 이하)",value=True)
         use_heat=st.checkbox("혹서기 (35도 이상)",value=False)
         use_wind=st.checkbox("강풍 (15m/s 이상)",value=False)
-        prep_days    = st.number_input("준비기간 (일)",value=PREP_PERIOD.get(proj_type,60),min_value=0)
-        cleanup_days = st.number_input("정리기간 (일)",value=20,min_value=0)
+        prep_days    = st.number_input("준비기간 (일)",min_value=0, key="sync_prep")
+        cleanup_days = st.number_input("정리기간 (일)",min_value=0, key="sync_clean")
 
     st.markdown("---")
     corr_rows=[]; total_applied=0.0
