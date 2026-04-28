@@ -251,6 +251,9 @@ MAJOR_WORKS = [
     {"no":"No.118","group":"맨홀공","name":"조립식PC맨홀(원형1호)-야간","spec":"H=1.76m","qty":134,"unit":"개소","amount":180492238,"labor":152431566,"night":True},
 ]
 
+# 굴착기·되메우기 기준 공종 (조수 = 장비대수)
+MACHINE_BASED_GROUPS = ["터파기","굴착","되메우기","모래기초","모래부설","모래,관기초"]
+
 def calc_manday(rates, quantity):
     return round(sum(v*quantity for k,v in rates.items() if k!="unit"), 2)
 
@@ -282,6 +285,27 @@ def extract_diameter(spec_str):
             if 50 <= val <= 3000:
                 return val
     return None
+
+def is_machine_based(name):
+    return any(kw in name for kw in MACHINE_BASED_GROUPS)
+
+def calc_days_with_crew(name, spec, qty, crews):
+    """조수(장비대수) 반영한 작업일수 계산"""
+    wd_info = calc_work_days(name, spec, qty, crews=crews)
+    if not wd_info:
+        return 0, "-"
+    base_daily = wd_info.get("daily", 0)
+    unit       = wd_info.get("unit", "")
+    if base_daily <= 0:
+        return 0, "-"
+    # 장비기반 공종: 1일작업량 × 조수(장비대수)
+    if is_machine_based(name):
+        days = math.ceil(qty / (base_daily * crews)) if crews > 0 else 0
+        label = f"{base_daily}{unit}/일×{crews}대"
+    else:
+        days = wd_info.get("work_days_ceil", 0)
+        label = f"{base_daily}{unit}/일×{crews}조"
+    return days, label
 
 def apply_labor_rate(item):
     try:
@@ -362,7 +386,6 @@ def apply_labor_rate(item):
         if any(kw in name for kw in ["배수설비","오수받이","우수받이","연결관"]):
             labor_fallback("인/개소")
             return item
-
         labor_fallback("인/일")
     except Exception:
         pass
@@ -395,7 +418,6 @@ def parse_by_keyword(file):
 
     ws = wb[target_sheet]
     all_rows = list(ws.iter_rows(values_only=True))
-
     header_row_idx=None; name_col=1; qty_col=3; unit_col=4; amount_col=6; labor_col=8
 
     for i, row in enumerate(all_rows[:10]):
@@ -450,11 +472,8 @@ def parse_by_keyword(file):
         })
 
     wb.close()
-
-    # 품셈 먼저 적용
     results = [apply_labor_rate(r) for r in results]
 
-    # 같은 공종명 합산
     merged = {}
     for r in results:
         key = (r["group"], r["name"].split("(")[0].strip())
@@ -581,7 +600,7 @@ with tab1:
 # ══════════════════════════════════════════════════════════════
 with tab2:
     st.subheader("엑셀 내역서 자동 인식")
-    st.caption("도급 설계내역서 업로드 → 키워드 탐지 → 1일작업량 기준 작업일수 산출 → 작업일수 내림차순 정렬")
+    st.caption("도급 설계내역서 업로드 → 키워드 탐지 → 1일작업량 기준 작업일수 산출")
 
     uploaded = st.file_uploader("설계내역서 엑셀 (.xlsx)", type=["xlsx","xls"])
 
@@ -605,7 +624,6 @@ with tab2:
                 df_m["주야간"]       = df_m["is_night"].map({True:"🌙야간",False:"☀️주간"})
                 df_m["작업일수"]     = df_m["work_days"].apply(lambda x: f"{int(x)}일" if x else "")
                 df_m["1일작업량"]    = df_m["daily_prod"]
-                df_m["조수"]         = df_m["crews"].apply(lambda x: f"{x}조" if x else "")
                 df_m["Man-day"]      = df_m["manday"].apply(lambda x: round(x,1) if x else "")
                 df_m["토질/관경"]    = df_m["soil_info"]
 
@@ -619,24 +637,22 @@ with tab2:
                 st.markdown("#### 인식된 공종 목록 (작업일수 내림차순)")
                 all_groups = sorted(df_m["group"].unique().tolist())
                 sel = st.multiselect("공종그룹 필터",all_groups,default=all_groups,key="t2f")
-
                 df_m_sorted = df_m[df_m["group"].isin(sel)].copy()
                 df_m_sorted["_sort"] = df_m_sorted["work_days"].fillna(0)
                 df_m_sorted = df_m_sorted.sort_values("_sort",ascending=False).reset_index(drop=True)
 
                 show_df = df_m_sorted[["group","name","spec","qty","unit",
-                                       "작업일수","1일작업량","조수",
+                                       "작업일수","1일작업량",
                                        "Man-day","토질/관경",
                                        "금액(억원)","노무비(억원)","주야간"]].copy()
                 show_df.columns = ["공종그룹","공종명","규격","수량","단위",
-                                   "작업일수","1일작업량","조수",
+                                   "작업일수","1일작업량",
                                    "Man-day(인일)","토질/관경",
                                    "금액(억원)","노무비(억원)","주야간"]
 
                 top10 = set(range(min(10, len(show_df))))
                 def hl(row):
                     return ["background-color:#1a3a1a;color:#4CAF50"]*len(row) if row.name in top10 else [""]*len(row)
-
                 st.dataframe(show_df.style.apply(hl,axis=1),
                              hide_index=True,use_container_width=True,height=420)
                 st.caption("🟢 작업일수 상위 10개 강조 (CP 후보)")
@@ -665,18 +681,15 @@ with tab2:
             # ── 공종별 작업일수 산출 ──────────────────────────
             st.markdown("---")
             st.subheader("공종별 작업일수 산출")
-            st.caption("가이드라인 부록1,2 기준 | 작업일수 내림차순 정렬")
+            st.caption("가이드라인 부록1,2 기준 | 조수 변경 시 즉시 재계산 | 작업일수 내림차순")
 
             if matched:
                 df_md = pd.DataFrame(matched)
-
-                wd_summary={}; md_summary={}
+                md_summary={}
                 for _, row in df_md.iterrows():
                     grp = row.get("group","기타")
-                    wd_summary[grp] = wd_summary.get(grp,0)+(row.get("work_days",0) or 0)
                     md_summary[grp] = md_summary.get(grp,0)+(row.get("manday",0) or 0)
 
-                # 물량 합산
                 grp_qty = df_md.groupby("group").agg(
                     물량=("qty","sum"), 단위=("unit","first")
                 ).reset_index()
@@ -702,32 +715,17 @@ with tab2:
                     days_from_md = math.ceil(md/wrk) if md>0 else 0
 
                     grp_items = [r for r in matched if r.get("group")==grp]
-
-                    # 1일작업량 × 투입조수 기준 재계산
                     days_from_wd = 0
                     daily_repr   = "-"
-                    total_qty    = 0
 
                     for item in grp_items:
                         item_qty  = item.get("qty") or 0
                         item_name = item.get("name","")
                         item_spec = item.get("spec","")
-                        total_qty += item_qty
-
-                        wd_info = calc_work_days(item_name, item_spec, item_qty, crews=wrk)
-                        if wd_info:
-                            # 터파기: 조수 = 굴착기 대수 → 1일작업량 × 조수
-                           if any(kw in item_name for kw in ["터파기","굴착","되메우기","모래기초","모래부설"]):
-                            base_daily = wd_info.get("daily", 300)
-                            adjusted_days = item_qty / (base_daily * wrk) if base_daily*wrk > 0 else 0
-                            days_from_wd += math.ceil(adjusted_days)
-                            else:
-                                days_from_wd += wd_info.get("work_days_ceil", 0)
-
-                            if daily_repr == "-":
-                                d = wd_info.get("daily","")
-                                u = wd_info.get("unit","")
-                                daily_repr = f"{d}{u}/일×{wrk}조"
+                        d, label  = calc_days_with_crew(item_name, item_spec, item_qty, wrk)
+                        days_from_wd += d
+                        if daily_repr == "-" and label != "-":
+                            daily_repr = label
 
                     final_days = int(days_from_wd) if days_from_wd > 0 else days_from_md
                     qty_val, unit_val = grp_qty_dict.get(grp,(0,""))
@@ -744,25 +742,17 @@ with tab2:
 
                 result_rows_sorted = sorted(result_rows, key=lambda x: -x["작업일수(일)"])
                 max_days = max((r["작업일수(일)"] for r in result_rows_sorted), default=0)
+                total_wd = sum(r["작업일수(일)"] for r in result_rows)
 
-                def hl_result(row):
-                    if row["작업일수(일)"] == max_days and max_days > 0:
-                        return ["background-color:#3d0000;color:#ff6b6b"]*len(row)
-                    return [""]*len(row)
-
-                # 합계 행 추가
+                # 합계 행
                 total_row = {
-                    "공종":         "[ 합  계 ]",
-                    "물량":         "-",
-                    "단위":         "-",
-                    "1일작업량":    "-",
-                    "투입조수":     "-",
-                    "작업일수(일)": sum(r["작업일수(일)"] for r in result_rows),
-                    "비고":         "",
+                    "공종":"[ 합  계 ]","물량":"-","단위":"-",
+                    "1일작업량":"-","투입조수":"-",
+                    "작업일수(일)":total_wd,"비고":"",
                 }
                 display_rows = result_rows_sorted + [total_row]
 
-                def hl_result2(row):
+                def hl_result(row):
                     if row["공종"] == "[ 합  계 ]":
                         return ["background-color:#1a1a3a;color:#7F77DD;font-weight:bold"]*len(row)
                     if row["작업일수(일)"] == max_days and max_days > 0:
@@ -770,18 +760,17 @@ with tab2:
                     return [""]*len(row)
 
                 st.dataframe(
-                    pd.DataFrame(display_rows).style.apply(hl_result2, axis=1),
+                    pd.DataFrame(display_rows).style.apply(hl_result, axis=1),
                     hide_index=True, use_container_width=True
                 )
-                st.caption("🔴 최장 작업일수 공종 = 주공정 (크리티컬패스) | 🔵 합계")
+                st.caption("🔴 최장 작업일수 = 주공정(크리티컬패스) | 🔵 합계")
 
-                total_wd  = sum(r["작업일수(일)"] for r in result_rows)
-                ca,cb,cc  = st.columns(3)
-                ca.metric("🔴 주공정 (최장)",
-                          f"{max_days}일",
-                          delta=max((r['공종'] for r in result_rows_sorted if r['작업일수(일)']==max_days), default=""))
-                cb.metric("총 순작업일수", f"{total_wd}일")
-                cc.metric("산출 공종", f"{sum(1 for r in result_rows if r['작업일수(일)']>0)}개")
+                main_grp = max((r for r in result_rows_sorted if r["작업일수(일)"]==max_days),
+                               key=lambda x: x["작업일수(일)"], default={"공종":""})
+                ca,cb,cc = st.columns(3)
+                ca.metric("🔴 주공정 (최장)", f"{max_days}일", delta=main_grp["공종"])
+                cb.metric("총 순작업일수",    f"{total_wd}일")
+                cc.metric("산출 공종",        f"{sum(1 for r in result_rows if r['작업일수(일)']>0)}개")
 
                 st.markdown("---")
                 if st.button("공기산정 탭에 물량 적용", type="primary"):
@@ -815,11 +804,6 @@ with tab2:
                 st.error(f"미리보기 실패: {e2}")
     else:
         st.info("도급(사급) 설계내역서 엑셀을 업로드해주세요.")
-        st.markdown("""
-**지원 파일:** 설계내역서(도급), 공사비내역서, 사급내역서
-**자동 제외:** 1식 항목, 재료비만인 항목, 관급자재, 계층코드 행
-**작업일수:** 가이드라인 부록1,2 1일작업량 기준, 작업일수 내림차순 정렬
-        """)
 
 # ══════════════════════════════════════════════════════════════
 # TAB 3
@@ -881,7 +865,6 @@ opacity:{"1.0" if hd else "0.4"};margin:2px'>
                     st.dataframe(dns,hide_index=True,use_container_width=True)
 
         st.markdown("---")
-        st.markdown("#### CP 공종 노무비 비교")
         if len(df_cp)>0:
             cd2=df_cp.copy()
             cd2["노무비(억원)"]=(cd2["labor"]/1e8).round(2)
@@ -906,7 +889,6 @@ opacity:{"1.0" if hd else "0.4"};margin:2px'>
 
         st.markdown("---")
         if len(df_mw)>0:
-            st.markdown("#### CP vs 비CP 노무비")
             cl=df_cp["labor"].sum() if len(df_cp)>0 else 0
             nl=df_non_cp["labor"].sum() if len(df_non_cp)>0 else 0
             fd=go.Figure(go.Pie(labels=["CP","비CP"],values=[cl,nl],hole=0.55,
@@ -915,7 +897,6 @@ opacity:{"1.0" if hd else "0.4"};margin:2px'>
             st.plotly_chart(fd,use_container_width=True)
 
         if len(df_cp)>0:
-            st.markdown("#### CP 그룹별 노무비")
             gs=df_cp.groupby("cp_group")["labor"].sum().reset_index()
             fd2=go.Figure(go.Pie(labels=gs["cp_group"],values=gs["labor"],hole=0.55,
                                  textinfo="label+percent",textfont_size=10))
@@ -973,7 +954,6 @@ with tab4:
 
     st.markdown("---")
     st.subheader("총 공사기간 산출")
-    st.caption("공사기간 = 준비기간 + 비작업일수 + 작업일수 + 정리기간")
     total_dur=prep_days+int(total_applied)+d_total+cleanup_days
     ca,cb,cc,cd,ce=st.columns(5)
     ca.metric("준비기간",f"{prep_days}일")
@@ -983,7 +963,6 @@ with tab4:
     ce.metric("총 공사기간",f"{total_dur}일",delta=f"약 {round(total_dur/30,1)}개월")
     st.info(f"**{prep_days}일(준비) + {int(total_applied)}일(비작업) + {d_total}일(작업) + {cleanup_days}일(정리) = {total_dur}일 (약 {round(total_dur/30,1)}개월)**")
 
-    st.markdown("#### 월별 비작업일수")
     fn=px.bar(nw_df,x="연월",y=["기상비작업일(A)","법정공휴일(B)"],barmode="stack",
               color_discrete_map={"기상비작업일(A)":"#378ADD","법정공휴일(B)":"#E67E22"})
     fn.add_scatter(x=nw_df["연월"],y=nw_df["적용일수"],mode="lines+markers",name="적용일수",
