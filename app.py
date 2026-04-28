@@ -790,12 +790,13 @@ with tab2:
                     st.session_state.workers["관부설공"]   = crew.get("관부설공",3)
                     st.session_state.workers["되메우기공"] = crew.get("되메우기",5)
                     st.session_state.workers["포장복구공"] = crew.get("포장복구",5)
-                    st.success("✅ 적용 완료! 공기산정 탭으로 이동하세요.")
-                    st.info("👆 상단의 **📋 공기산정** 탭을 클릭하거나, 키보드 **Home** 키를 누르면 상단으로 이동합니다.")
-                    # 페이지 맨 위에 빈 앵커 배치 후 st.rerun으로 자동 이동
-                    if st.button("⬆️ 공기산정 탭으로 이동", type="secondary"):
-                        st.session_state["goto_tab1"] = True
-                        st.rerun()
+                    st.success("✅ 적용 완료!")
+                    st.markdown("""
+<div style='background-color:#1a2a1a;border:1px solid #4CAF50;border-radius:8px;padding:16px;text-align:center;margin-top:8px'>
+<div style='font-size:18px;margin-bottom:8px'>👆 상단의 <b style='color:#5DCAA5'>📋 공기산정</b> 탭을 클릭하세요</div>
+<div style='font-size:13px;color:#aaa'>또는 키보드 <b>Home</b> 키로 상단으로 이동 후 탭 클릭</div>
+</div>
+""", unsafe_allow_html=True)
 
         except Exception as e:
             st.error(f"파싱 오류: {e}")
