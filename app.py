@@ -502,6 +502,11 @@ w = st.session_state.workers
 st.title("상하수도 관로공사 공기산정 시스템")
 st.markdown("---")
 
+# TAB 이동 처리
+if st.session_state.get("goto_tab1"):
+    st.session_state["goto_tab1"] = False
+    st.query_params["tab"] = "공기산정"
+
 tab1,tab2,tab3,tab4 = st.tabs(["📋 공기산정","📂 엑셀 내역서 인식","🔍 주요공종 CP 분석","🌧 비작업일수 계산기"])
 
 # ══════════════════════════════════════════════════════════════
@@ -785,23 +790,12 @@ with tab2:
                     st.session_state.workers["관부설공"]   = crew.get("관부설공",3)
                     st.session_state.workers["되메우기공"] = crew.get("되메우기",5)
                     st.session_state.workers["포장복구공"] = crew.get("포장복구",5)
-                    st.success("✅ 적용 완료!")
-                    st.info("👆 화면 상단의 **📋 공기산정** 탭을 클릭하세요.")
-                    st.markdown("""
-<div style='text-align:center;margin-top:10px'>
-<button onclick="window.parent.document.querySelector('.main').scrollTo({top:0, behavior:'smooth'});"
-style='
-    background-color:#378ADD;
-    color:white;
-    padding:12px 30px;
-    border:none;
-    border-radius:8px;
-    font-size:16px;
-    font-weight:bold;
-    cursor:pointer;
-'>⬆️ 상단으로 이동 (탭 선택)</button>
-</div>
-""", unsafe_allow_html=True)
+                    st.success("✅ 적용 완료! 공기산정 탭으로 이동하세요.")
+                    st.info("👆 상단의 **📋 공기산정** 탭을 클릭하거나, 키보드 **Home** 키를 누르면 상단으로 이동합니다.")
+                    # 페이지 맨 위에 빈 앵커 배치 후 st.rerun으로 자동 이동
+                    if st.button("⬆️ 공기산정 탭으로 이동", type="secondary"):
+                        st.session_state["goto_tab1"] = True
+                        st.rerun()
 
         except Exception as e:
             st.error(f"파싱 오류: {e}")
