@@ -525,7 +525,7 @@ with tab2:
 
                 result_rows_sorted = sorted(result_rows, key=lambda x: -x["작업일수(일)"])
                 max_days = max((r["작업일수(일)"] for r in result_rows_sorted), default=0)
-                total_wd = sum(r["작업일수(일)"] for r in result_rows)
+                total_wd = max_days  # 관로 선형공사 병행시공 반영 (주공정이 곧 총 작업일수)
 
                 # 합계행
                 total_row = {"공종":"[ 합  계 ]","물량":"-","단위":"-",
@@ -620,7 +620,7 @@ with tab1:
             hide_index=True, use_container_width=True
         )
 
-        total_wd = sum(r["작업일수(일)"] for r in result_rows)
+        total_wd = max_days  # 관로 선형공사 병행시공 반영
         main_grp = next((r["공종"] for r in sorted(result_rows, key=lambda x:-x["작업일수(일)"]) if r["작업일수(일)"]==max_days), "")
         ca,cb,cc = st.columns(3)
         ca.metric("🔴 주공정 (최장)", f"{max_days}일", delta=main_grp)
@@ -630,29 +630,23 @@ with tab1:
         st.markdown("---")
         st.subheader("간트차트")
 
-        # 간트차트용 시작/종료일 계산 (CP 순서로 순차)
+        # 간트차트용 시작/종료일 계산 (당일 병행시공 기준)
         gantt_data = []
-        colors_map = {
-            "굴착공":"#378ADD","관부설공":"#D85A30","되메우기":"#EF9F27",
-            "맨홀공":"#E67E22","포장복구":"#27AE60","배수설비":"#9B59B6",
-            "추진공":"#E74C3C","기타":"#888888"
-        }
-
-        current_start = start_date
+        # ... (색상 매핑 코드는 그대로 유지) ...
         for r in rows_ordered:
             days = r["작업일수(일)"]
             if days <= 0:
                 continue
-            end = get_work_end_date(current_start, days)
+            # 모든 관로 공종은 착공일과 동시에 진행되는 것으로 간주
+            end = get_work_end_date(start_date, days)
             gantt_data.append({
                 "Task":    r["공종"],
-                "Start":   str(current_start),
+                "Start":   str(start_date),
                 "Finish":  str(end),
                 "투입조수": r["투입조수"],
                 "작업일수": f"{days}일",
                 "1일작업량": r["1일작업량"],
             })
-            current_start = end + timedelta(days=1)
 
         if gantt_data:
             gantt_df = pd.DataFrame(gantt_data)
@@ -756,7 +750,7 @@ with tab1:
         d_관부설  = math.ceil(q_관부설  / (5   * w_관부설))  if q_관부설  else 0
         d_되메우기= math.ceil(q_되메우기 / (316 * w_되메우기)) if q_되메우기 else 0
         d_포장    = math.ceil(q_포장    / (600 * w_포장))    if q_포장    else 0
-        d_total   = d_굴착 + d_관부설 + d_되메우기 + d_포장
+        d_total   = max(d_굴착, d_관부설, d_되메우기, d_포장)
 
         manual_rows = [
             {"공종":"굴착공",  "물량":f"{q_터파기:,.0f}","단위":"m3","1일작업량":f"420m3/일×{w_굴착}대","투입조수":f"{w_굴착}조","작업일수(일)":d_굴착},
@@ -772,13 +766,11 @@ with tab1:
 
         # 수동 간트차트
         gantt_m = []
-        cur = start_date
         colors_m = {"굴착공":"#378ADD","관부설공":"#D85A30","되메우기":"#EF9F27","포장복구":"#27AE60"}
         for r in manual_rows:
             if r["작업일수(일)"] > 0:
-                end = get_work_end_date(cur, r["작업일수(일)"])
-                gantt_m.append({"Task":r["공종"],"Start":str(cur),"Finish":str(end)})
-                cur = end + timedelta(days=1)
+                end = get_work_end_date(start_date, r["작업일수(일)"])
+                gantt_m.append({"Task":r["공종"],"Start":str(start_date),"Finish":str(end)})
         if gantt_m:
             fig2 = px.timeline(pd.DataFrame(gantt_m), x_start="Start", x_end="Finish",
                                y="Task", color="Task", color_discrete_map=colors_m)
