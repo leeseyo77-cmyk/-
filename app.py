@@ -979,10 +979,10 @@ with tab1:
             q_포장     = st.number_input("포장 면적 (m2)",      min_value=0.0, value=60.0,  step=5.0)
 
         c1,c2,c3,c4 = st.columns(4)
-        w_굴착    = c1.number_input("굴착공(조)", min_value=1, value=5)
+        w_굴착    = c1.number_input("굴착공(조)", min_value=1, value=3)
         w_관부설  = c2.number_input("관부설공(조)", min_value=1, value=3)
-        w_되메우기= c3.number_input("되메우기(조)", min_value=1, value=5)
-        w_포장    = c4.number_input("포장복구(조)", min_value=1, value=5)
+        w_되메우기= c3.number_input("되메우기(조)", min_value=1, value=3)
+        w_포장    = c4.number_input("포장복구(조)", min_value=1, value=3)
 
         # 1일작업량 기준 계산
         d_굴착    = math.ceil(q_터파기  / (420 * w_굴착))    if q_터파기  else 0
