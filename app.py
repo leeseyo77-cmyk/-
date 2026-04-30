@@ -445,11 +445,12 @@ start_date = date.today()  # 기본값만 설정
 st.title("상하수도 관로공사 공기산정 시스템")
 st.markdown("---")
 
-tab1,tab2,tab3,tab4 = st.tabs([
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "📋 공기산정",
-    "📂 엑셀 내역서 인식",
+    "📊 엑셀 내역서 인식", 
     "🔍 주요공종 CP 분석",
-    "🌧 비작업일수 계산기"
+    "📅 비작업일수 계산기",
+    "📄 공기산정 보고서"
 ])
 
 # ══════════════════════════════════════════════════════════════
@@ -1291,3 +1292,223 @@ with tab4:
     fn.update_layout(height=300,margin=dict(l=10,r=10,t=20,b=10))
     st.plotly_chart(fn,use_container_width=True)
     st.caption(f"지역: {city} | 2014~2023년 10개년 평균 | 출처: 국토교통부 가이드라인(2025.01.)")
+
+# ══════════════════════════════════════════════════════════════
+# TAB 5: 공기산정 보고서 생성
+# ══════════════════════════════════════════════════════════════
+with tab5:
+    st.subheader("📄 공기산정 근거 보고서")
+    st.caption("계산된 데이터를 바탕으로 공기산정 검토서를 자동 생성합니다.")
+    
+    # 프로젝트 정보 입력
+    with st.expander("📝 프로젝트 정보 입력", expanded=True):
+        col1, col2 = st.columns(2)
+        with col1:
+            project_name = st.text_input("공사명", value="○○지구 하수관로 정비사업", 
+                                         help="예: 지북지구 하수관로 정비사업")
+            project_location = st.text_input("공사 위치", value="서울특별시", 
+                                            help="예: 충청남도 보령시")
+        with col2:
+            project_type_report = st.selectbox("공사 구분", 
+                                              ["기본 및 실시설계", "실시설계", "설계용역"])
+            contractor = st.text_input("발주처", value="○○시청", 
+                                      help="예: 보령시")
+    
+    st.markdown("---")
+    
+    # 데이터 확인
+    st.markdown("### 📊 보고서에 포함될 데이터")
+    
+    col1, col2, col3 = st.columns(3)
+    
+    # TAB 1 데이터 확인
+    has_tab1_data = "grouped_result" in st.session_state
+    with col1:
+        if has_tab1_data:
+            st.success("✅ 공종별 작업일수")
+            total_work_days = st.session_state.get("total_work_days", 0)
+            st.metric("총 작업일수", f"{total_work_days}일")
+        else:
+            st.warning("⚠️ TAB 1에서 내역서를 업로드하세요")
+    
+    # TAB 4 데이터 확인
+    has_tab4_data = "final_duration" in st.session_state
+    with col2:
+        if has_tab4_data:
+            st.success("✅ 비작업일수 계산")
+            total_duration = st.session_state.get("final_duration", 0)
+            st.metric("총 공사기간", f"{total_duration}일")
+        else:
+            st.warning("⚠️ TAB 4에서 비작업일수를 계산하세요")
+    
+    # 투입조수 정보
+    with col3:
+        if has_tab1_data:
+            st.success("✅ 투입조수 설정")
+            st.caption("공종별 투입조수 반영됨")
+        else:
+            st.info("ℹ️ 투입조수 정보 대기 중")
+    
+    st.markdown("---")
+    
+    # 보고서 생성 버튼
+    if st.button("📥 공기산정 보고서 생성", type="primary", use_container_width=True):
+        if not has_tab1_data:
+            st.error("❌ TAB 1에서 내역서를 먼저 업로드하세요!")
+        elif not has_tab4_data:
+            st.error("❌ TAB 4에서 비작업일수를 먼저 계산하세요!")
+        else:
+            with st.spinner("📊 보고서를 생성하는 중입니다..."):
+                try:
+                    # 엑셀 보고서 생성
+                    from openpyxl import Workbook
+                    from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+                    from datetime import datetime
+                    import io
+                    
+                    wb = Workbook()
+                    
+                    # ═══════════════════════════════════════════
+                    # 시트 1: 표지
+                    # ═══════════════════════════════════════════
+                    ws_cover = wb.active
+                    ws_cover.title = "표지"
+                    
+                    # 표지 내용
+                    ws_cover.merge_cells('A5:J5')
+                    ws_cover['A5'] = project_name
+                    ws_cover['A5'].font = Font(size=20, bold=True)
+                    ws_cover['A5'].alignment = Alignment(horizontal='center', vertical='center')
+                    
+                    ws_cover.merge_cells('A7:J7')
+                    ws_cover['A7'] = "공사기간 산정 검토서(첨부자료)"
+                    ws_cover['A7'].font = Font(size=16, bold=True)
+                    ws_cover['A7'].alignment = Alignment(horizontal='center', vertical='center')
+                    
+                    ws_cover.merge_cells('A10:J10')
+                    ws_cover['A10'] = datetime.now().strftime("%Y년 %m월")
+                    ws_cover['A10'].font = Font(size=14)
+                    ws_cover['A10'].alignment = Alignment(horizontal='center', vertical='center')
+                    
+                    ws_cover.row_dimensions[5].height = 40
+                    ws_cover.row_dimensions[7].height = 30
+                    
+                    # ═══════════════════════════════════════════
+                    # 시트 2: 공사기간 산정
+                    # ═══════════════════════════════════════════
+                    ws_summary = wb.create_sheet("2. 공사기간 산정")
+                    
+                    row = 1
+                    ws_summary[f'A{row}'] = "2. 공사기간 산정"
+                    ws_summary[f'A{row}'].font = Font(size=14, bold=True)
+                    row += 2
+                    
+                    # 2.1 준비기간
+                    ws_summary[f'B{row}'] = "2.1 준비기간"
+                    ws_summary[f'B{row}'].font = Font(size=12, bold=True)
+                    row += 1
+                    
+                    prep_days = st.session_state.get("prep_period", 60)
+                    ws_summary[f'C{row}'] = "준비기간"
+                    ws_summary[f'H{row}'] = prep_days
+                    ws_summary[f'I{row}'] = "일"
+                    row += 2
+                    
+                    # 2.2 순작업일수
+                    ws_summary[f'B{row}'] = "2.2 순작업일수"
+                    ws_summary[f'B{row}'].font = Font(size=12, bold=True)
+                    row += 1
+                    
+                    work_days = st.session_state.get("total_work_days", 0)
+                    ws_summary[f'C{row}'] = "공종별 작업일수 합계"
+                    ws_summary[f'H{row}'] = work_days
+                    ws_summary[f'I{row}'] = "일"
+                    row += 2
+                    
+                    # 2.3 비작업일수
+                    ws_summary[f'B{row}'] = "2.3 비작업일수"
+                    ws_summary[f'B{row}'].font = Font(size=12, bold=True)
+                    row += 1
+                    
+                    non_work_days = st.session_state.get("total_non_work_days", 0)
+                    ws_summary[f'C{row}'] = "기후 및 법정공휴일 비작업일수"
+                    ws_summary[f'H{row}'] = non_work_days
+                    ws_summary[f'I{row}'] = "일"
+                    row += 2
+                    
+                    # 2.4 정리기간
+                    ws_summary[f'B{row}'] = "2.4 정리기간"
+                    ws_summary[f'B{row}'].font = Font(size=12, bold=True)
+                    row += 1
+                    
+                    clean_days = st.session_state.get("clean_period", 30)
+                    ws_summary[f'C{row}'] = "정리기간"
+                    ws_summary[f'H{row}'] = clean_days
+                    ws_summary[f'I{row}'] = "일"
+                    row += 2
+                    
+                    # 2.5 총 공사기간
+                    ws_summary[f'B{row}'] = "2.5 총 공사기간"
+                    ws_summary[f'B{row}'].font = Font(size=12, bold=True, color="FF0000")
+                    row += 1
+                    
+                    total_days = st.session_state.get("final_duration", 0)
+                    ws_summary[f'C{row}'] = "총 공사기간"
+                    ws_summary[f'H{row}'] = total_days
+                    ws_summary[f'I{row}'] = "일"
+                    ws_summary[f'H{row}'].font = Font(bold=True, size=12, color="FF0000")
+                    
+                    # ═══════════════════════════════════════════
+                    # 시트 3: 부록1. 작업일수 산정
+                    # ═══════════════════════════════════════════
+                    ws_detail = wb.create_sheet("부록1. 작업일수 산정")
+                    
+                    # 헤더
+                    ws_detail['A1'] = "◈ 부록1. 작업일수 산정"
+                    ws_detail['A1'].font = Font(size=14, bold=True)
+                    ws_detail.merge_cells('A1:K1')
+                    
+                    # 테이블 헤더
+                    headers = ["공종", "세부공종", "규격", "수량", "단위", "1일작업량", "투입조수", "작업일수", "비고"]
+                    for col_idx, header in enumerate(headers, 1):
+                        cell = ws_detail.cell(row=3, column=col_idx)
+                        cell.value = header
+                        cell.font = Font(bold=True)
+                        cell.fill = PatternFill(start_color="D9E1F2", end_color="D9E1F2", fill_type="solid")
+                        cell.alignment = Alignment(horizontal='center', vertical='center')
+                        cell.border = Border(
+                            left=Side(style='thin'),
+                            right=Side(style='thin'),
+                            top=Side(style='thin'),
+                            bottom=Side(style='thin')
+                        )
+                    
+                    # 데이터 삽입
+                    if has_tab1_data:
+                        grouped_result = st.session_state.get("grouped_result", {})
+                        row_idx = 4
+                        
+                        for group_name, items in grouped_result.items():
+                            # 그룹 헤더
+                            ws_detail.cell(row=row_idx, column=1).value = group_name
+                            ws_detail.cell(row=row_idx, column=1).font = Font(bold=True)
+                            ws_detail.cell(row=row_idx, column=1).fill = PatternFill(
+                                start_color="E7E6E6", end_color="E7E6E6", fill_type="solid"
+                            )
+                            row_idx += 1
+                            
+                            # 세부 항목
+                            for item in items:
+                                ws_detail.cell(row=row_idx, column=1).value = ""
+                                ws_detail.cell(row=row_idx, column=2).value = item.get("name", "")
+                                ws_detail.cell(row=row_idx, column=3).value = item.get("spec", "")
+                                ws_detail.cell(row=row_idx, column=4).value = item.get("qty", 0)
+                                ws_detail.cell(row=row_idx, column=5).value = item.get("unit", "")
+                                ws_detail.cell(row=row_idx, column=6).value = item.get("daily_rate", "")
+                                ws_detail.cell(row=row_idx, column=7).value = item.get("crews", "")
+                                ws_detail.cell(row=row_idx, column=8).value = item.get("days", 0)
+                                ws_detail.cell(row=row_idx, column=9).value = item.get("note", "")
+                                row_idx += 1
+                    
+                    # 열 너비 조정
+                    ws_detail.column_dimensions['A'].width = 15
