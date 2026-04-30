@@ -1362,153 +1362,18 @@ with tab5:
                 try:
                     # 엑셀 보고서 생성
                     from openpyxl import Workbook
-                    from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
-                    from datetime import datetime
-                    import io
-                    
-                    wb = Workbook()
-                    
-                    # ═══════════════════════════════════════════
-                    # 시트 1: 표지
-                    # ═══════════════════════════════════════════
-                    ws_cover = wb.active
-                    ws_cover.title = "표지"
-                    
-                    # 표지 내용
-                    ws_cover.merge_cells('A5:J5')
-                    ws_cover['A5'] = project_name
-                    ws_cover['A5'].font = Font(size=20, bold=True)
-                    ws_cover['A5'].alignment = Alignment(horizontal='center', vertical='center')
-                    
-                    ws_cover.merge_cells('A7:J7')
-                    ws_cover['A7'] = "공사기간 산정 검토서(첨부자료)"
-                    ws_cover['A7'].font = Font(size=16, bold=True)
-                    ws_cover['A7'].alignment = Alignment(horizontal='center', vertical='center')
-                    
-                    ws_cover.merge_cells('A10:J10')
-                    ws_cover['A10'] = datetime.now().strftime("%Y년 %m월")
-                    ws_cover['A10'].font = Font(size=14)
-                    ws_cover['A10'].alignment = Alignment(horizontal='center', vertical='center')
-                    
-                    ws_cover.row_dimensions[5].height = 40
-                    ws_cover.row_dimensions[7].height = 30
-                    
-                    # ═══════════════════════════════════════════
-                    # 시트 2: 공사기간 산정
-                    # ═══════════════════════════════════════════
-                    ws_summary = wb.create_sheet("2. 공사기간 산정")
-                    
-                    row = 1
-                    ws_summary[f'A{row}'] = "2. 공사기간 산정"
-                    ws_summary[f'A{row}'].font = Font(size=14, bold=True)
-                    row += 2
-                    
-                    # 2.1 준비기간
-                    ws_summary[f'B{row}'] = "2.1 준비기간"
-                    ws_summary[f'B{row}'].font = Font(size=12, bold=True)
-                    row += 1
-                    
-                    prep_days = st.session_state.get("prep_period", 60)
-                    ws_summary[f'C{row}'] = "준비기간"
-                    ws_summary[f'H{row}'] = prep_days
-                    ws_summary[f'I{row}'] = "일"
-                    row += 2
-                    
-                    # 2.2 순작업일수
-                    ws_summary[f'B{row}'] = "2.2 순작업일수"
-                    ws_summary[f'B{row}'].font = Font(size=12, bold=True)
-                    row += 1
-                    
-                    work_days = st.session_state.get("total_work_days", 0)
-                    ws_summary[f'C{row}'] = "공종별 작업일수 합계"
-                    ws_summary[f'H{row}'] = work_days
-                    ws_summary[f'I{row}'] = "일"
-                    row += 2
-                    
-                    # 2.3 비작업일수
-                    ws_summary[f'B{row}'] = "2.3 비작업일수"
-                    ws_summary[f'B{row}'].font = Font(size=12, bold=True)
-                    row += 1
-                    
-                    non_work_days = st.session_state.get("total_non_work_days", 0)
-                    ws_summary[f'C{row}'] = "기후 및 법정공휴일 비작업일수"
-                    ws_summary[f'H{row}'] = non_work_days
-                    ws_summary[f'I{row}'] = "일"
-                    row += 2
-                    
-                    # 2.4 정리기간
-                    ws_summary[f'B{row}'] = "2.4 정리기간"
-                    ws_summary[f'B{row}'].font = Font(size=12, bold=True)
-                    row += 1
-                    
-                    clean_days = st.session_state.get("clean_period", 30)
-                    ws_summary[f'C{row}'] = "정리기간"
-                    ws_summary[f'H{row}'] = clean_days
-                    ws_summary[f'I{row}'] = "일"
-                    row += 2
-                    
-                    # 2.5 총 공사기간
-                    ws_summary[f'B{row}'] = "2.5 총 공사기간"
-                    ws_summary[f'B{row}'].font = Font(size=12, bold=True, color="FF0000")
-                    row += 1
-                    
-                    total_days = st.session_state.get("final_duration", 0)
-                    ws_summary[f'C{row}'] = "총 공사기간"
-                    ws_summary[f'H{row}'] = total_days
-                    ws_summary[f'I{row}'] = "일"
-                    ws_summary[f'H{row}'].font = Font(bold=True, size=12, color="FF0000")
-                    
-                    # ═══════════════════════════════════════════
-                    # 시트 3: 부록1. 작업일수 산정
-                    # ═══════════════════════════════════════════
-                    ws_detail = wb.create_sheet("부록1. 작업일수 산정")
-                    
-                    # 헤더
-                    ws_detail['A1'] = "◈ 부록1. 작업일수 산정"
-                    ws_detail['A1'].font = Font(size=14, bold=True)
-                    ws_detail.merge_cells('A1:K1')
-                    
-                    # 테이블 헤더
-                    headers = ["공종", "세부공종", "규격", "수량", "단위", "1일작업량", "투입조수", "작업일수", "비고"]
-                    for col_idx, header in enumerate(headers, 1):
-                        cell = ws_detail.cell(row=3, column=col_idx)
-                        cell.value = header
-                        cell.font = Font(bold=True)
-                        cell.fill = PatternFill(start_color="D9E1F2", end_color="D9E1F2", fill_type="solid")
-                        cell.alignment = Alignment(horizontal='center', vertical='center')
-                        cell.border = Border(
-                            left=Side(style='thin'),
-                            right=Side(style='thin'),
-                            top=Side(style='thin'),
-                            bottom=Side(style='thin')
-                        )
-                    
-                    # 데이터 삽입
-                    if has_tab1_data:
-                        grouped_result = st.session_state.get("grouped_result", {})
-                        row_idx = 4
-                        
-                        for group_name, items in grouped_result.items():
-                            # 그룹 헤더
-                            ws_detail.cell(row=row_idx, column=1).value = group_name
-                            ws_detail.cell(row=row_idx, column=1).font = Font(bold=True)
-                            ws_detail.cell(row=row_idx, column=1).fill = PatternFill(
-                                start_color="E7E6E6", end_color="E7E6E6", fill_type="solid"
-                            )
-                            row_idx += 1
-                            
-                            # 세부 항목
-                            for item in items:
-                                ws_detail.cell(row=row_idx, column=1).value = ""
-                                ws_detail.cell(row=row_idx, column=2).value = item.get("name", "")
-                                ws_detail.cell(row=row_idx, column=3).value = item.get("spec", "")
-                                ws_detail.cell(row=row_idx, column=4).value = item.get("qty", 0)
-                                ws_detail.cell(row=row_idx, column=5).value = item.get("unit", "")
-                                ws_detail.cell(row=row_idx, column=6).value = item.get("daily_rate", "")
-                                ws_detail.cell(row=row_idx, column=7).value = item.get("crews", "")
-                                ws_detail.cell(row=row_idx, column=8).value = item.get("days", 0)
-                                ws_detail.cell(row=row_idx, column=9).value = item.get("note", "")
-                                row_idx += 1
+                    # ... 중간 코드 ...
                     
                     # 열 너비 조정
                     ws_detail.column_dimensions['A'].width = 15
+                    ws_detail.column_dimensions['B'].width = 30
+                    ws_detail.column_dimensions['C'].width = 25
+                    ws_detail.column_dimensions['D'].width = 12
+                    ws_detail.column_dimensions['E'].width = 8
+                    ws_detail.column_dimensions['F'].width = 20
+                    ws_detail.column_dimensions['G'].width = 12
+                    ws_detail.column_dimensions['H'].width = 12
+                    ws_detail.column_dimensions['I'].width = 15
+                    
+                except Exception as e:
+                    st.error(f"❌ 보고서 생성 중 오류가 발생했습니다: {str(e)}")
