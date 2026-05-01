@@ -695,7 +695,169 @@ with tab2:
                         file_name=f"규격별_상세_작업일수_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.csv",
                         mime="text/csv"
                     )
+# ═══════════════════════════════════════════════════════
+# TAB 2에 추가할 코드: 폴더 탐색기 스타일 계층 구조 UI
+# ═══════════════════════════════════════════════════════
+# 
+# 위치: TAB 2의 "규격별 상세 작업일수 산정" expander 다음에 추가
+#
 
+                # ═══════════════════════════════════════════════════════
+                # 📂 공종별 계층 구조 (폴더 탐색기 스타일)
+                # ═══════════════════════════════════════════════════════
+                st.markdown("---")
+                st.markdown("### 📂 공종별 계층 구조 및 투입조수 설정")
+                st.caption("공종을 클릭하여 세부 항목을 확인하고 투입조수를 조정하세요")
+                
+                # 계층 구조 파싱 (내역서에서)
+                import re
+                hierarchy = []
+                current_category = None
+                
+                for row in all_rows:
+                    gong_jong = str(row[0]).strip() if row[0] else ""
+                    name = str(row[1]).strip() if len(row) > 1 and row[1] else ""
+                    spec = str(row[2]).strip() if len(row) > 2 and row[2] else ""
+                    qty = row[3] if len(row) > 3 else 0
+                    unit = str(row[4]).strip() if len(row) > 4 and row[4] else ""
+                    
+                    # 1.1.1, 1.1.2 형태 인식
+                    if re.match(r'^\d+\.\d+\.\d+$', gong_jong):
+                        if current_category and current_category['items']:
+                            hierarchy.append(current_category)
+                        
+                        current_category = {
+                            'level': gong_jong,
+                            'name': name,
+                            'items': [],
+                            'total_qty': 0
+                        }
+                        continue
+                    
+                    # 세부 항목
+                    if not gong_jong and name and current_category:
+                        try:
+                            qty_val = float(qty) if qty else 0
+                        except:
+                            qty_val = 0
+                            
+                        if qty_val > 0:
+                            current_category['items'].append({
+                                'name': name,
+                                'spec': spec,
+                                'qty': qty_val,
+                                'unit': unit
+                            })
+                
+                # 마지막 카테고리 추가
+                if current_category and current_category['items']:
+                    hierarchy.append(current_category)
+                
+                # 투입조수 설정 (초기값: session_state 또는 기본 3조)
+                if 'crew_by_category' not in st.session_state:
+                    st.session_state['crew_by_category'] = {}
+                
+                # 폴더 탐색기 스타일 UI
+                for cat in hierarchy:
+                    cat_name = cat['name']
+                    cat_level = cat['level']
+                    item_count = len(cat['items'])
+                    
+                    # 투입조수 기본값
+                    default_crew = st.session_state['crew_by_category'].get(cat_name, 3)
+                    
+                    # 이 카테고리의 작업일수 계산
+                    cat_total_days = 0
+                    for item in cat['items']:
+                        # calc_days_priority 함수 사용
+                        d, label, method = calc_days_priority(
+                            item['name'], 
+                            item['spec'], 
+                            item['qty'], 
+                            default_crew
+                        )
+                        cat_total_days += d
+                    
+                    # expander로 펼침/접기
+                    with st.expander(
+                        f"{'▶' if True else '▼'} **{cat_level} {cat_name}** "
+                        f"({cat_total_days}일, {default_crew}조) "
+                        f"[{item_count}개 항목]",
+                        expanded=False
+                    ):
+                        # 투입조수 조정
+                        col1, col2 = st.columns([3, 1])
+                        with col1:
+                            st.caption(f"💼 **{cat_name}** 세부 항목")
+                        with col2:
+                            new_crew = st.number_input(
+                                "투입조수",
+                                min_value=1,
+                                max_value=10,
+                                value=default_crew,
+                                key=f"crew_{cat_level}_{cat_name}",
+                                help="이 공종의 투입조수를 조정하세요"
+                            )
+                            if new_crew != default_crew:
+                                st.session_state['crew_by_category'][cat_name] = new_crew
+                                st.rerun()
+                        
+                        st.markdown("---")
+                        
+                        # 세부 항목 테이블
+                        detail_items = []
+                        for item in cat['items']:
+                            d, label, method = calc_days_priority(
+                                item['name'], 
+                                item['spec'], 
+                                item['qty'], 
+                                new_crew
+                            )
+                            
+                            # 출처 판단
+                            source = ""
+                            if "가이드라인" in method or "부록" in method:
+                                source = "가이드라인"
+                            elif "표준품셈" in method or "Man-day" in method:
+                                source = "표준품셈"
+                            elif "노무비" in method:
+                                source = "노무비"
+                            
+                            detail_items.append({
+                                "세부공종": item['name'],
+                                "규격": item['spec'],
+                                "수량": f"{item['qty']:,.1f}",
+                                "단위": item['unit'],
+                                "1일작업량": label,
+                                "작업일수": int(d),
+                                "출처": source
+                            })
+                        
+                        if detail_items:
+                            df_items = pd.DataFrame(detail_items)
+                            st.dataframe(
+                                df_items,
+                                hide_index=True,
+                                use_container_width=True,
+                                height=min(400, len(detail_items) * 35 + 38)
+                            )
+                            
+                            # 통계
+                            col_a, col_b, col_c = st.columns(3)
+                            with col_a:
+                                st.metric("📦 세부 항목", f"{len(detail_items)}개")
+                            with col_b:
+                                st.metric("⏱️ 총 작업일수", f"{sum(int(i['작업일수']) for i in detail_items)}일")
+                            with col_c:
+                                st.metric("👷 투입조수", f"{new_crew}조")
+                
+                st.info("""
+                ### 💡 사용 방법
+                - **▶ 버튼**을 클릭하여 각 공종의 세부 항목을 확인하세요
+                - **투입조수**를 조정하면 작업일수가 자동으로 재계산됩니다
+                - 각 항목의 **출처**를 확인하여 계산 근거를 파악할 수 있습니다
+                """)
+                
                 # session_state에 결과 저장 → TAB1에서 사용
                 st.session_state["work_result"] = {
                     "rows":    result_rows,
