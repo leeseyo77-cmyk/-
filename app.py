@@ -471,75 +471,31 @@ tab1,tab2,tab3,tab4,tab5 = st.tabs([
 # TAB 2: 엑셀 내역서 인식 (먼저 정의 - TAB1이 결과 사용)
 # ══════════════════════════════════════════════════════════════
 with tab2:
-    st.subheader("엑셀 내역서 자동 인식")
-    st.caption("도급 설계내역서 업로드 → 1순위:가이드라인 1일작업량 / 2순위:표준품셈 → 작업일수 산출")
-
+    st.subheader("📂 엑셀 내역서 자동 인식 (내역서 기반)")
+    st.caption("도급 설계내역서 업로드 → 계층 구조 자동 파싱 → 공종별 투입조수 조정")
+ 
     uploaded = st.file_uploader("설계내역서 엑셀 (.xlsx)", type=["xlsx","xls"])
-
+ 
     if uploaded:
         try:
             with st.spinner("파싱 중..."):
                 all_rows, col_info = parse_by_keyword(uploaded)
-
+ 
             matched   = [r for r in all_rows if r["group"]!="기타" and r["qty"] is not None]
             unmatched = [r for r in all_rows if r["group"]=="기타"  and r["qty"] is not None]
-
+ 
             st.success(f"시트 **{col_info['시트명']}** | 인식 **{len(matched)}건** | 미인식 **{len(unmatched)}건**")
-
-            with st.expander("컬럼 탐색 결과"):
-                st.json(col_info)
-
-            if matched:
-                df_m = pd.DataFrame(matched)
-                df_m["금액(억원)"]   = (df_m["amount"].fillna(0)/1e8).round(2)
-                df_m["노무비(억원)"] = (df_m["labor"].fillna(0)/1e8).round(2)
-                df_m["주야간"]       = df_m["is_night"].map({True:"🌙야간",False:"☀️주간"})
-
-                ca,cb,cc,cd = st.columns(4)
-                ca.metric("인식 공종",f"{len(matched)}건")
-                cb.metric("총 금액",f"{df_m['금액(억원)'].sum():.1f}억")
-                cc.metric("총 노무비",f"{df_m['노무비(억원)'].sum():.1f}억")
-                cd.metric("야간공종",f"{df_m['is_night'].sum()}건")
-
-                # 인식 결과 테이블
-                all_groups = sorted(df_m["group"].unique().tolist())
-                sel = st.multiselect("공종그룹 필터",all_groups,default=all_groups,key="t2f")
-                fm = df_m[df_m["group"].isin(sel)].copy()
-                fm_show = fm[["group","name","spec","qty","unit","금액(억원)","노무비(억원)","주야간"]].copy()
-                fm_show.columns = ["공종그룹","공종명","규격","수량","단위","금액(억원)","노무비(억원)","주야간"]
-                st.dataframe(fm_show, hide_index=True, use_container_width=True, height=300)
-
-            if unmatched:
-                st.markdown("---")
-                with st.expander(f"⚠️ 미인식 항목 수동 분류하기 ({len(unmatched)}건) - 클릭하여 펼치기"):
-                    st.caption("인식되지 않은 항목을 수동으로 공종 그룹에 매핑할 수 있습니다.")
-                    공종목록 = ["(선택안함)"]+list(KEYWORD_MAP_DETAIL.keys())+["기타"]
-                    manual=[]
-                    for idx,item in enumerate(unmatched[:30]):
-                        ca,cb,cc,cd,ce=st.columns([3,1,1,1,2])
-                        ca.markdown(f"<span style='color:#FFA500'>{item['name'][:30]}</span>",unsafe_allow_html=True)
-                        cb.write(item.get("spec","")[:10])
-                        cc.write(str(item["qty"]) if item["qty"] else "-")
-                        cd.write(item["unit"])
-                        sel2=ce.selectbox("공종",공종목록,key=f"mn_{idx}")
-                        if sel2!="(선택안함)":
-                            manual.append({**item,"group":sel2})
-                    if len(unmatched)>30:
-                        st.caption(f"... 외 {len(unmatched)-30}건 더 있음")
-                    if manual:
-                        matched=matched+manual
-
+ 
             # ── 내역서 계층 구조 파싱 ────────────────────
-            st.markdown("---")
-            st.subheader("📂 내역서 기반 공종별 작업일수 산출")
-            st.caption("내역서의 계층 구조(1.1.1, 1.1.2...)를 자동으로 인식하여 공종을 그룹핑합니다")
-
             if matched:
-                # 계층 구조 파싱
+                st.markdown("---")
+                st.subheader("📂 내역서 기반 공종 분류")
+                
                 import re
                 hierarchy = []
                 current_category = None
                 
+                # 계층 구조 파싱
                 for row in all_rows:
                     gong_jong = str(row[0]).strip() if row[0] else ""
                     name = str(row[1]).strip() if len(row) > 1 and row[1] else ""
@@ -558,7 +514,6 @@ with tab2:
                     
                     # 세부 항목 추가
                     if current_category and not gong_jong and name:
-                        # matched에서 해당 항목 찾기
                         for item in matched:
                             if item['name'] == name:
                                 current_category['items'].append(item)
@@ -568,131 +523,47 @@ with tab2:
                 if current_category and current_category.get('items'):
                     hierarchy.append(current_category)
                 
-                # 투입조수 초기화 (session_state)
-                if 'crew_by_category' not in st.session_state:
-                    st.session_state['crew_by_category'] = {}
-                
-                # 공종별 투입조수 설정 UI
-                st.markdown("### 🔧 공종별 투입조수 설정")
-                
-                crew_settings = {}
-                cols = st.columns(min(len(hierarchy), 4))
-                
-                for idx, cat in enumerate(hierarchy):
-                    cat_name = cat['name']
-                    default_crew = st.session_state['crew_by_category'].get(cat_name, 3)
+                if hierarchy:
+                    st.info(f"✅ {len(hierarchy)}개 공종 자동 인식: " + ", ".join([f"{h['level']} {h['name']}" for h in hierarchy]))
                     
-                    with cols[idx % len(cols)]:
-                        crew_val = st.number_input(
-                            f"{cat_name}(조)",
-                            min_value=1,
-                            max_value=30,
-                            value=default_crew,
-                            key=f"crew_cat_{idx}"
-                        )
-                        crew_settings[cat_name] = crew_val
-                        st.session_state['crew_by_category'][cat_name] = crew_val
-                
-                # 작업일수 계산
-                st.markdown("---")
-                st.markdown("### 📊 공종별 작업일수 계산 결과")
-                
-                result_rows = []
-                
-                for cat in hierarchy:
-                    cat_name = cat['name']
-                    cat_level = cat['level']
-                    cat_crew = crew_settings[cat_name]
-                    cat_items = cat['items']
+                    # ── 투입조수 설정 ────────────────────
+                    st.markdown("### 🔧 공종별 투입조수 설정")
                     
-                    # 이 카테고리의 총 작업일수
-                    cat_total_days = 0
-                    cat_detail_items = []
+                    if 'crew_by_category' not in st.session_state:
+                        st.session_state['crew_by_category'] = {}
                     
-                    for item in cat_items:
-                        d, label, method = calc_days_priority(
-                            item['name'],
-                            item.get('spec', ''),
-                            item.get('qty', 0),
-                            cat_crew
-                        )
-                        cat_total_days += d
-                        cat_detail_items.append({
-                            'name': item['name'],
-                            'spec': item.get('spec', ''),
-                            'qty': item.get('qty', 0),
-                            'unit': item.get('unit', ''),
-                            'days': d,
-                            'label': label,
-                            'method': method
-                        })
+                    crew_settings = {}
+                    cols = st.columns(min(len(hierarchy), 4))
                     
-                    result_rows.append({
-                        "공종": f"{cat_level} {cat_name}",
-                        "물량": f"{len(cat_items)}개 항목",
-                        "단위": "-",
-                        "1일작업량": "-",
-                        "투입조수": f"{cat_crew}조",
-                        "작업일수(일)": int(cat_total_days),
-                        "계산방식": f"{len(cat_items)}개 항목 합계"
-                    })
+                    for idx, cat in enumerate(hierarchy):
+                        cat_name = cat['name']
+                        default_crew = st.session_state['crew_by_category'].get(cat_name, 3)
+                        
+                        with cols[idx % len(cols)]:
+                            crew_val = st.number_input(
+                                f"{cat_name}(조)",
+                                min_value=1,
+                                max_value=30,
+                                value=default_crew,
+                                key=f"crew_cat_{cat['level']}"
+                            )
+                            crew_settings[cat_name] = crew_val
+                            st.session_state['crew_by_category'][cat_name] = crew_val
                     
-                    # 상세 항목 저장
-                    if cat_name not in globals():
-                        globals()[f"detail_{cat_level}"] = cat_detail_items
-                
-                # 결과 테이블 표시
-                result_rows_sorted = sorted(result_rows, key=lambda x: x["작업일수(일)"], reverse=True)
-                max_days = max((r["작업일수(일)"] for r in result_rows_sorted), default=0)
-                total_wd = max_days  # 병렬작업 반영
-                
-                # 합계행
-                total_row = {"공종":"[ 합  계 ]","물량":"-","단위":"-",
-                             "1일작업량":"-","투입조수":"-",
-                             "작업일수(일)":total_wd,"계산방식":""}
-                display_rows = result_rows_sorted + [total_row]
-                
-                def hl_result(row):
-                    if row["공종"] == "[ 합  계 ]":
-                        return ["background-color:#1a1a3a;color:#7F77DD;font-weight:bold"]*len(row)
-                    if row["작업일수(일)"] == max_days and max_days > 0:
-                        return ["background-color:#3d0000;color:#ff6b6b"]*len(row)
-                    return [""]*len(row)
-                
-                st.dataframe(
-                    pd.DataFrame(display_rows).style.apply(hl_result, axis=1),
-                    hide_index=True, use_container_width=True
-                )
-                st.caption("🔴 최장 작업일수 = 주공정(크리티컬패스) | 🔵 합계")
-                
-                main_grp = next((r["공종"] for r in result_rows_sorted if r["작업일수(일)"]==max_days), "")
-                ca,cb,cc = st.columns(3)
-                ca.metric("🔴 주공정 (최장)", f"{max_days}일", delta=main_grp)
-                cb.metric("총 순작업일수",    f"{total_wd}일")
-                cc.metric("산출 공종",        f"{len(result_rows)}개")
-
-                # 폴더 탐색기 스타일 상세 보기
-                st.markdown("---")
-                st.markdown("### 📂 공종별 세부 항목 (폴더 탐색기 스타일)")
-                
-                for cat in hierarchy:
-                    cat_name = cat['name']
-                    cat_level = cat['level']
-                    cat_crew = crew_settings[cat_name]
-                    cat_items = cat['items']
+                    # ── 작업일수 계산 ────────────────────
+                    st.markdown("---")
+                    st.markdown("### 📊 공종별 작업일수 계산 결과")
                     
-                    # 이 카테고리의 총 작업일수 재계산
-                    cat_total_days = sum(
-                        calc_days_priority(item['name'], item.get('spec', ''), item.get('qty', 0), cat_crew)[0]
-                        for item in cat_items
-                    )
+                    result_rows = []
                     
-                    with st.expander(
-                        f"▶ **{cat_level} {cat_name}** ({cat_total_days}일, {cat_crew}조) [{len(cat_items)}개 항목]",
-                        expanded=False
-                    ):
-                        # 세부 항목 테이블
-                        detail_items = []
+                    for cat in hierarchy:
+                        cat_name = cat['name']
+                        cat_level = cat['level']
+                        cat_crew = crew_settings[cat_name]
+                        cat_items = cat['items']
+                        
+                        cat_total_days = 0
+                        
                         for item in cat_items:
                             d, label, method = calc_days_priority(
                                 item['name'],
@@ -700,74 +571,135 @@ with tab2:
                                 item.get('qty', 0),
                                 cat_crew
                             )
-                            
-                            # 출처 판단
-                            source = ""
-                            if "가이드라인" in method or "부록" in method:
-                                source = "가이드라인"
-                            elif "표준품셈" in method or "Man-day" in method:
-                                source = "표준품셈"
-                            elif "노무비" in method:
-                                source = "노무비"
-                            
-                            detail_items.append({
-                                "세부공종": item['name'],
-                                "규격": item.get('spec', ''),
-                                "수량": f"{item.get('qty', 0):,.1f}",
-                                "단위": item.get('unit', ''),
-                                "1일작업량": label,
-                                "작업일수": int(d),
-                                "출처": source
-                            })
+                            cat_total_days += d
                         
-                        if detail_items:
-                            df_items = pd.DataFrame(detail_items)
-                            st.dataframe(
-                                df_items,
-                                hide_index=True,
-                                use_container_width=True,
-                                height=min(400, len(detail_items) * 35 + 38)
-                            )
+                        result_rows.append({
+                            "공종": f"{cat_level} {cat_name}",
+                            "물량": f"{len(cat_items)}개 항목",
+                            "단위": "-",
+                            "1일작업량": "-",
+                            "투입조수(조)": cat_crew,
+                            "작업일수(일)": int(cat_total_days),
+                            "계산방식": f"{len(cat_items)}개 항목 합계"
+                        })
+                    
+                    # 결과 테이블
+                    result_rows_sorted = sorted(result_rows, key=lambda x: x["작업일수(일)"], reverse=True)
+                    max_days = max((r["작업일수(일)"] for r in result_rows_sorted), default=0)
+                    total_wd = max_days
+                    
+                    # 합계행
+                    total_row = {
+                        "공종": "[ 합  계 ]",
+                        "물량": "-",
+                        "단위": "-",
+                        "1일작업량": "-",
+                        "투입조수(조)": "-",
+                        "작업일수(일)": total_wd,
+                        "계산방식": "병렬작업 반영"
+                    }
+                    display_rows = result_rows_sorted + [total_row]
+                    
+                    def hl_result(row):
+                        if row["공종"] == "[ 합  계 ]":
+                            return ["background-color:#1a1a3a;color:#7F77DD;font-weight:bold"]*len(row)
+                        if row["작업일수(일)"] == max_days and max_days > 0:
+                            return ["background-color:#3d0000;color:#ff6b6b"]*len(row)
+                        return [""]*len(row)
+                    
+                    st.dataframe(
+                        pd.DataFrame(display_rows).style.apply(hl_result, axis=1),
+                        hide_index=True,
+                        use_container_width=True
+                    )
+                    st.caption("🔴 최장 작업일수 = 주공정(크리티컬패스) | 🔵 합계")
+                    
+                    main_grp = next((r["공종"] for r in result_rows_sorted if r["작업일수(일)"]==max_days), "")
+                    ca, cb, cc = st.columns(3)
+                    ca.metric("🔴 주공정 (최장)", f"{max_days}일", delta=main_grp)
+                    cb.metric("총 순작업일수", f"{total_wd}일")
+                    cc.metric("산출 공종", f"{len(result_rows)}개")
+                    
+                    # ── 폴더 탐색기 스타일 상세 보기 ────────────────────
+                    st.markdown("---")
+                    st.markdown("### 📂 공종별 세부 항목 (폴더 탐색기 스타일)")
+                    
+                    for cat in hierarchy:
+                        cat_name = cat['name']
+                        cat_level = cat['level']
+                        cat_crew = crew_settings[cat_name]
+                        cat_items = cat['items']
+                        
+                        cat_total_days = sum(
+                            calc_days_priority(item['name'], item.get('spec', ''), item.get('qty', 0), cat_crew)[0]
+                            for item in cat_items
+                        )
+                        
+                        with st.expander(
+                            f"▶ **{cat_level} {cat_name}** ({cat_total_days}일, {cat_crew}조) [{len(cat_items)}개 항목]",
+                            expanded=False
+                        ):
+                            detail_items = []
+                            for item in cat_items:
+                                d, label, method = calc_days_priority(
+                                    item['name'],
+                                    item.get('spec', ''),
+                                    item.get('qty', 0),
+                                    cat_crew
+                                )
+                                
+                                source = ""
+                                if "가이드라인" in method or "부록" in method:
+                                    source = "가이드라인"
+                                elif "표준품셈" in method or "Man-day" in method:
+                                    source = "표준품셈"
+                                elif "노무비" in method:
+                                    source = "노무비"
+                                
+                                detail_items.append({
+                                    "세부공종": item['name'],
+                                    "규격": item.get('spec', ''),
+                                    "수량": f"{item.get('qty', 0):,.1f}",
+                                    "단위": item.get('unit', ''),
+                                    "1일작업량": label,
+                                    "작업일수": int(d),
+                                    "출처": source
+                                })
                             
-                            # 통계
-                            col_a, col_b, col_c = st.columns(3)
-                            with col_a:
-                                st.metric("📦 세부 항목", f"{len(detail_items)}개")
-                            with col_b:
-                                st.metric("⏱️ 총 작업일수", f"{sum(int(i['작업일수']) for i in detail_items)}일")
-                            with col_c:
-                                st.metric("👷 투입조수", f"{cat_crew}조")
-
-                # session_state에 결과 저장 → TAB1,TAB5에서 사용
-                st.session_state["work_result"] = {
-                    "rows": result_rows,
-                    "hierarchy": hierarchy,
-                    "crew_settings": crew_settings,
-                    "matched": matched,
-                }
-                st.session_state["has_excel_data"] = True
-                st.session_state["total_work_days"] = int(total_wd)
-                             "작업일수(일)":total_wd,"계산방식":""}
-                display_rows = result_rows_sorted + [total_row]
-
-                def hl_result(row):
-                    if row["공종"] == "[ 합  계 ]":
-                        return ["background-color:#1a1a3a;color:#7F77DD;font-weight:bold"]*len(row)
-                    if row["작업일수(일)"] == max_days and max_days > 0:
-                        return ["background-color:#3d0000;color:#ff6b6b"]*len(row)
-                    return [""]*len(row)
-
-                st.dataframe(
-                    pd.DataFrame(display_rows).style.apply(hl_result, axis=1),
-                    hide_index=True, use_container_width=True
-                )
-                st.caption("🔴 최장 작업일수 = 주공정(크리티컬패스) | 🔵 합계")
-
-                main_grp = next((r["공종"] for r in result_rows_sorted if r["작업일수(일)"]==max_days), "")
-                ca,cb,cc = st.columns(3)
-                ca.metric("🔴 주공정 (최장)", f"{max_days}일", delta=main_grp)
-                cb.metric("총 순작업일수",    f"{total_wd}일")
-                cc.metric("산출 공종",        f"{sum(1 for r in result_rows if r['작업일수(일)']>0)}개")
+                            if detail_items:
+                                df_items = pd.DataFrame(detail_items)
+                                st.dataframe(
+                                    df_items,
+                                    hide_index=True,
+                                    use_container_width=True,
+                                    height=min(400, len(detail_items) * 35 + 38)
+                                )
+                                
+                                col_a, col_b, col_c = st.columns(3)
+                                with col_a:
+                                    st.metric("📦 세부 항목", f"{len(detail_items)}개")
+                                with col_b:
+                                    st.metric("⏱️ 총 작업일수", f"{sum(int(i['작업일수']) for i in detail_items)}일")
+                                with col_c:
+                                    st.metric("👷 투입조수", f"{cat_crew}조")
+                    
+                    # session_state에 저장
+                    st.session_state["work_result"] = {
+                        "rows": result_rows,
+                        "hierarchy": hierarchy,
+                        "crew_settings": crew_settings,
+                        "matched": matched,
+                    }
+                    st.session_state["has_excel_data"] = True
+                    st.session_state["total_work_days"] = int(total_wd)
+                
+                else:
+                    st.warning("⚠️ 내역서에서 계층 구조(1.1.1, 1.1.2...)를 찾을 수 없습니다.")
+                    
+        except Exception as e:
+            st.error(f"미리보기 실패: {e}")
+    else:
+        st.info("도급(사급) 설계내역서 엑셀을 업로드해주세요.")
 
                 # ═══════════════════════════════════════════════════════
                 # 규격별 상세 작업일수 산정 (부록1 형태)
