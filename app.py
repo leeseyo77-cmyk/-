@@ -141,6 +141,50 @@ def calc_work_days(name, spec, qty, crews=3):
     
     return None
 
+def extract_q_from_dangagun(uploaded_file, item_name):
+    """
+    단가산출근거 시트에서 시간당 작업량(Q) 추출
+    반환: {"hourly": 250, "unit": "m³/Hr"} 또는 None
+    """
+    try:
+        wb = openpyxl.load_workbook(uploaded_file, data_only=True)
+        
+        if '단가산출근거' not in wb.sheetnames:
+            return None
+        
+        ws = wb['단가산출근거']
+        
+        # 항목명으로 해당 섹션 찾기
+        found_section = False
+        
+        for row in ws.iter_rows(min_row=1, values_only=True):
+            row_text = " ".join([str(c) for c in row if c])
+            
+            # 공종명이 포함된 행 찾기
+            if item_name in row_text:
+                found_section = True
+            
+            # Q 값 찾기 (섹션을 찾은 후 100줄 이내)
+            if found_section and "Q =" in row_text:
+                # 패턴 1: Q = 2000 m³/일 /8 Hr = 250.00 m³/Hr
+                match1 = re.search(r'=\s*([\d.]+)\s*([^/\s]+/Hr)', row_text, re.IGNORECASE)
+                if match1:
+                    hourly_val = float(match1.group(1))
+                    unit = match1.group(2).replace("HR", "Hr").replace("hr", "Hr")
+                    return {"hourly": hourly_val, "unit": unit}
+                
+                # 패턴 2: Q = 숫자 단위
+                match2 = re.search(r'Q\s*=\s*([\d.]+)\s*([^\s]+)', row_text)
+                if match2:
+                    hourly_val = float(match2.group(1))
+                    unit = match2.group(2)
+                    return {"hourly": hourly_val, "unit": unit}
+        
+        return None
+        
+    except Exception:
+        return None
+
 def calc_days_priority(name, spec, qty, crews=3):
     """
     작업일수 계산 우선순위
@@ -193,6 +237,25 @@ def calc_days_priority(name, spec, qty, crews=3):
         if manday > 0:
             days = math.ceil(manday / (8 * crews))
             return days, f"{round(manday/qty,3)}인/단위×{crews}조", "표준품셈 Man-day"
+    except Exception:
+        pass
+    
+    # ── 3순위: 단가산출근거 시간당 작업량(Q) ──────────────────
+    try:
+        if "dangagun_cache" in st.session_state:
+            cache = st.session_state["dangagun_cache"]
+            
+            # 항목명으로 캐시에서 찾기
+            for cached_name, info in cache.items():
+                if cached_name in name or name in cached_name:
+                    hourly_val = info.get("hourly", 0)
+                    unit = info.get("unit", "")
+                    
+                    if hourly_val > 0:
+                        # 1일 작업량 = 시간당 × 8시간
+                        daily_val = hourly_val * 8
+                        days = math.ceil(qty / (daily_val * crews))
+                        return days, f"{daily_val:.1f}{unit.replace('/Hr','/일')}×{crews}조", "단가산출근거"
     except Exception:
         pass
 
@@ -422,6 +485,33 @@ with tab2:
                 # 계층 구조 파싱 (원본 엑셀에서)
                 wb = openpyxl.load_workbook(uploaded, data_only=True)
                 ws = wb['설계내역서'] if '설계내역서' in wb.sheetnames else wb.active
+                
+                # 단가산출근거 시트에서 Q 값 캐싱
+                dangagun_cache = {}
+                if '단가산출근거' in wb.sheetnames:
+                    ws_danga = wb['단가산출근거']
+                    current_item = None
+                    
+                    for row in ws_danga.iter_rows(min_row=1, values_only=True):
+                        row_text = " ".join([str(c) for c in row if c])
+                        
+                        # 항목명 추출 (두 번째 열에서)
+                        if row[1] and "/" in str(row[1]):
+                            item_text = str(row[1]).strip()
+                            # "품명 / 단위" 형태에서 품명 추출
+                            if "/" in item_text:
+                                current_item = item_text.split("/")[0].strip()
+                        
+                        # Q 값 추출
+                        if current_item and "Q =" in row_text:
+                            match = re.search(r'=\s*([\d.]+)\s*([^/\s]+/Hr)', row_text, re.IGNORECASE)
+                            if match:
+                                hourly_val = float(match.group(1))
+                                unit = match.group(2).replace("HR", "Hr")
+                                dangagun_cache[current_item] = {"hourly": hourly_val, "unit": unit}
+                
+                # 캐시를 session_state에 저장
+                st.session_state["dangagun_cache"] = dangagun_cache
                 
                 hierarchy = []
                 current_category = None
