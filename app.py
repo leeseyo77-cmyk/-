@@ -370,8 +370,16 @@ def parse_by_keyword(file):
         if group == "관부설공" and any(ex in name for ex in ["절단","이형관","하차비","단관","마감캡"]):
             group = "기타"
 
+        # 규격 상세 정보 추출 (장비, 관경 등)
+        detail_spec = spec
+        if not detail_spec and name:
+            # 이름에서 규격 추출 시도
+            spec_match = re.search(r'\([^)]+\)', name)
+            if spec_match:
+                detail_spec = spec_match.group(0)
+
         results.append({
-            "group":group,"name":name,"spec":spec,
+            "group":group,"name":name,"spec":detail_spec,
             "qty":qty,"unit":unit,"amount":amount,"labor":labor,
             "is_night":"-야간" in name,
         })
@@ -530,7 +538,7 @@ with tab2:
                 # 조수 설정
                 st.markdown("**공종별 투입 조수 설정**")
                 target_groups = ["굴착공","관부설공","되메우기","포장복구","맨홀공","배수설비","추진공"]
-                defaults_map  = {"굴착공":3,"관부설공":3,"되메우기":3,"포장복구":3,
+                defaults_map  = {"굴착공":5,"관부설공":3,"되메우기":5,"포장복구":5,
                                  "맨홀공":3,"배수설비":3,"추진공":1}
                 crew_cols = st.columns(len(target_groups))
                 crew={}
@@ -604,12 +612,99 @@ with tab2:
                 cb.metric("총 순작업일수",    f"{total_wd}일")
                 cc.metric("산출 공종",        f"{sum(1 for r in result_rows if r['작업일수(일)']>0)}개")
 
+                # ═══════════════════════════════════════════════════════
+                # 규격별 상세 작업일수 산정 (부록1 형태)
+                # ═══════════════════════════════════════════════════════
+                with st.expander("📊 규격별 상세 작업일수 산정 (부록1 형태)", expanded=False):
+                    st.caption("공종별로 규격을 구분하여 상세하게 표시합니다.")
+                    
+                    detail_rows = []
+                    for grp in target_groups:
+                        wrk = crew.get(grp, 3)
+                        grp_items = [r for r in matched if r.get("group") == grp]
+                        
+                        if not grp_items:
+                            continue
+                        
+                        # 공종 헤더 추가
+                        detail_rows.append({
+                            "공종": grp,
+                            "세부공종": "",
+                            "규격": "",
+                            "수량": "",
+                            "단위": "",
+                            "1일작업량": "",
+                            "투입조수": f"{wrk}조",
+                            "작업일수": "",
+                            "출처": "",
+                        })
+                        
+                        # 규격별 상세 항목
+                        for item in grp_items:
+                            item_qty = item.get("qty") or 0
+                            item_name = item.get("name", "")
+                            item_spec = item.get("spec", "")
+                            item_unit = item.get("unit", "")
+                            
+                            if item_qty <= 0:
+                                continue
+                            
+                            # 작업일수 계산
+                            d, label, method = calc_days_priority(item_name, item_spec, item_qty, wrk)
+                            
+                            # 출처 판단
+                            source = ""
+                            if "가이드라인" in method or "부록" in method:
+                                source = "가이드라인"
+                            elif "표준품셈" in method or "Man-day" in method:
+                                source = "표준품셈"
+                            elif "노무비" in method:
+                                source = "노무비 역산"
+                            
+                            detail_rows.append({
+                                "공종": "",
+                                "세부공종": item_name,
+                                "규격": item_spec,
+                                "수량": f"{item_qty:,.1f}",
+                                "단위": item_unit,
+                                "1일작업량": label,
+                                "투입조수": f"{wrk}조",
+                                "작업일수": int(d),
+                                "출처": source,
+                            })
+                    
+                    # 스타일 적용 함수
+                    def highlight_group_header(row):
+                        if row["공종"] and not row["세부공종"]:
+                            return ["background-color: #2c3e50; color: white; font-weight: bold"] * len(row)
+                        return [""] * len(row)
+                    
+                    df_detail = pd.DataFrame(detail_rows)
+                    st.dataframe(
+                        df_detail.style.apply(highlight_group_header, axis=1),
+                        hide_index=True,
+                        use_container_width=True,
+                        height=600
+                    )
+                    
+                    # CSV 다운로드
+                    csv_detail = df_detail.to_csv(index=False, encoding="utf-8-sig")
+                    st.download_button(
+                        label="📥 규격별 상세 내역 CSV 다운로드",
+                        data=csv_detail,
+                        file_name=f"규격별_상세_작업일수_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                        mime="text/csv"
+                    )
+
                 # session_state에 결과 저장 → TAB1에서 사용
                 st.session_state["work_result"] = {
                     "rows":    result_rows,
                     "crew":    crew,
                     "matched": matched,
                 }
+                # 상세 데이터도 저장
+                if 'detail_rows' in locals():
+                    st.session_state["detail_rows"] = detail_rows
 
                 st.markdown("---")
                 st.success("✅ 위 결과가 자동으로 공기산정 탭에 반영됩니다.")
@@ -641,11 +736,10 @@ padding:16px;text-align:center;margin-top:8px'>
         st.info("도급(사급) 설계내역서 엑셀을 업로드해주세요.")
 
 # session_state에 저장 (TAB 5 보고서용)
-work_result = st.session_state.get("work_result")
-if work_result and "rows" in work_result and len(work_result["rows"]) > 0:
+if 'sch_df' in locals() and 'sch_df' in dir() and len(sch_df) > 0:
     st.session_state["has_excel_data"] = True
-    total_days = sum(r.get("작업일수(일)", 0) for r in work_result["rows"])
-    st.session_state["total_work_days"] = int(total_days)
+    st.session_state["total_work_days"] = int(sch_df["작업일수"].sum())
+    st.session_state["excel_schedule_df"] = sch_df
 
 # ══════════════════════════════════════════════════════════════
 # TAB 1: 공기산정 (TAB2 결과 사용)
