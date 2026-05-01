@@ -535,11 +535,18 @@ with tab2:
                     if 'crew_by_category' not in st.session_state:
                         st.session_state['crew_by_category'] = {}
                     
-                    crew_settings = {}
-                    cols = st.columns(min(len(hierarchy), 4))
-                    
-                    for idx, cat in enumerate(hierarchy):
+                    # 공종명별로 그룹핑 (같은 이름이면 조수 공유)
+                    unique_categories = {}
+                    for cat in hierarchy:
                         cat_name = cat['name']
+                        if cat_name not in unique_categories:
+                            unique_categories[cat_name] = []
+                        unique_categories[cat_name].append(cat)
+                    
+                    crew_settings = {}
+                    cols = st.columns(min(len(unique_categories), 4))
+                    
+                    for idx, (cat_name, cat_list) in enumerate(unique_categories.items()):
                         default_crew = st.session_state['crew_by_category'].get(cat_name, 3)
                         
                         with cols[idx % len(cols)]:
@@ -548,7 +555,7 @@ with tab2:
                                 min_value=1,
                                 max_value=30,
                                 value=default_crew,
-                                key=f"crew_cat_{cat['level']}"
+                                key=f"crew_cat_{cat_name.replace(' ', '_')}"
                             )
                             crew_settings[cat_name] = crew_val
                             st.session_state['crew_by_category'][cat_name] = crew_val
