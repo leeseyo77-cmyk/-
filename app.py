@@ -447,17 +447,23 @@ with tab2:
                 if hierarchy:
                     st.info(f"✅ {len(hierarchy)}개 주공종 인식")
                     
-                    # 투입조수 설정 (주공종만)
+                    # 투입조수 설정 (주공종만, 중복 제거)
                     st.markdown("### 🔧 주공종 투입조수 설정")
                     
                     if 'crew_by_main' not in st.session_state:
                         st.session_state['crew_by_main'] = {}
                     
-                    crew_settings = {}
-                    cols = st.columns(min(len(hierarchy), 4))
-                    
-                    for idx, cat in enumerate(hierarchy):
+                    # 같은 이름 중복 제거
+                    unique_main_cats = {}
+                    for cat in hierarchy:
                         cat_name = cat['name']
+                        if cat_name not in unique_main_cats:
+                            unique_main_cats[cat_name] = cat
+                    
+                    crew_settings = {}
+                    cols = st.columns(min(len(unique_main_cats), 4))
+                    
+                    for idx, (cat_name, cat) in enumerate(unique_main_cats.items()):
                         default_crew = st.session_state['crew_by_main'].get(cat_name, 3)
                         
                         with cols[idx % len(cols)]:
@@ -466,7 +472,7 @@ with tab2:
                                 min_value=1,
                                 max_value=30,
                                 value=default_crew,
-                                key=f"crew_main_{idx}"
+                                key=f"crew_main_{cat_name.replace(' ', '_')}"
                             )
                             crew_settings[cat_name] = crew_val
                             st.session_state['crew_by_main'][cat_name] = crew_val
