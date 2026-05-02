@@ -29,11 +29,11 @@ st.set_page_config(page_title="상하수도 공기산정", layout="wide", initia
 # 공종 키워드 매핑
 # ══════════════════════════════════════════════════════════════
 KEYWORD_MAP_DETAIL = {
-    "굴착공": ["터파기","굴착","줄파기","착공","시굴","포장깨기","포장절단","아스팔트"],
+    "포장복구": ["포장복구","아스팔트포장","아스팔트+콘크리트포장","콘크리트포장","보도포장","인도포장","보조기층","택코팅","프라임코팅","기층","표층","차선도색"],
+    "굴착공": ["터파기","굴착","줄파기","착공","시굴","포장깨기","포장절단"],
     "관부설공": ["관 부설","관부설","PE다중벽관","고강성PVC","주철관","GRP관",
                  "유리섬유복합관","흄관","이중벽관","강관부설","콘크리트관"],
     "되메우기": ["되메우기","뒤채움","복토","성토"],
-    "포장복구": ["포장복구","아스팔트포장","콘크리트포장","보도포장","인도포장","포장"],
     "맨홀공": ["맨홀","우수받이","집수정","토실","슬라이딩"],
     "배수설비": ["배수설비","빗물받이"],
     "추진공": ["추진공","추진관","추진"],
@@ -418,7 +418,8 @@ def parse_by_keyword(file):
         key = (r["name"], r["spec"])
         if key not in merged:
             merged[key] = dict(r)
-            merged[key]["name"] = r["name"].split("(")[0].strip()
+            # 항목명 그대로 유지 (괄호 제거하지 않음!)
+            merged[key]["name"] = r["name"]
         else:
             merged[key]["qty"] = (merged[key].get("qty") or 0) + (r.get("qty") or 0)
             merged[key]["amount"] = (merged[key].get("amount") or 0) + (r.get("amount") or 0)
@@ -550,14 +551,16 @@ with tab2:
                         current_sub_category = None
                         continue
                     
-                    if re.match(r'^\d+\)$', gong_jong) and current_category:
-                        if current_sub_category:
-                            current_category['sub_categories'].append(current_sub_category)
-                        current_sub_category = {
-                            'level': gong_jong,
-                            'name': name,
-                            'items': []
-                        }
+                    if re.match(r'^\d+\)$', gong_jong):
+                        # 1), 2) 형태는 무조건 sub_category
+                        if current_category:
+                            if current_sub_category:
+                                current_category['sub_categories'].append(current_sub_category)
+                            current_sub_category = {
+                                'level': gong_jong,
+                                'name': name,
+                                'items': []
+                            }
                         continue
                     
                     if current_category and not gong_jong and name:
