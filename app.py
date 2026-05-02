@@ -8,6 +8,21 @@ import plotly.express as px
 import plotly.graph_objects as go
 from io import BytesIO
 
+# 가이드라인 데이터 및 기상 데이터 import
+try:
+    from guideline_data import GUIDELINE_APPENDIX_FULL, GUIDELINE_APPENDIX
+    from weather_data import HEAT_DAYS, REGIONS, get_heat_days_by_region, get_total_non_work_days
+except ImportError:
+    # 파일이 없을 경우 기본값 사용
+    GUIDELINE_APPENDIX_FULL = {}
+    GUIDELINE_APPENDIX = {}
+    HEAT_DAYS = {}
+    REGIONS = ["서울"]
+    def get_heat_days_by_region(region, month=None):
+        return 0.0
+    def get_total_non_work_days(region, start, end):
+        return 0.0
+
 st.set_page_config(page_title="상하수도 공기산정", layout="wide", initial_sidebar_state="expanded")
 
 # ══════════════════════════════════════════════════════════════
@@ -146,7 +161,10 @@ def calc_days_priority(name, spec, qty, crews=3):
         # 정확한 매칭 시도
         full_name = f"{name} {spec}".strip()
         
-        for key, val in GUIDELINE_APPENDIX.items():
+        # GUIDELINE_APPENDIX_FULL 우선 사용 (확장판)
+        guideline_data = GUIDELINE_APPENDIX_FULL if GUIDELINE_APPENDIX_FULL else GUIDELINE_APPENDIX
+        
+        for key, val in guideline_data.items():
             # 키워드 추출 (괄호 앞부분)
             key_base = key.split("(")[0].strip()
             
@@ -778,10 +796,50 @@ with tab2:
 # TAB 1
 # ══════════════════════════════════════════════════════════════
 with tab1:
-    st.subheader("공기산정")
+    st.subheader("📋 공기산정 요약")
+    
+    st.markdown("### ⚙️ 기본 설정")
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        selected_region = st.selectbox(
+            "🌍 공사 지역 선택",
+            options=REGIONS,
+            index=REGIONS.index("서울") if "서울" in REGIONS else 0,
+            help="지역별 기상 데이터 (혹서기 비작업일수) 적용"
+        )
+        st.session_state["selected_region"] = selected_region
+    
+    with col2:
+        st.metric("선택 지역", selected_region)
+    
+    with col3:
+        if selected_region in HEAT_DAYS:
+            annual_heat_days = HEAT_DAYS[selected_region].get("연간", 0)
+            st.metric("연간 혹서기 일수", f"{annual_heat_days:.1f}일")
+    
+    st.markdown("---")
+    
     if "work_result" in st.session_state:
         st.success("✅ TAB 2에서 계산 완료!")
-        st.metric("총 순작업일수", f"{st.session_state.get('total_work_days', 0)}일")
+        
+        col_a, col_b, col_c = st.columns(3)
+        total_work_days = st.session_state.get('total_work_days', 0)
+        
+        col_a.metric("💼 총 순작업일수", f"{total_work_days}일")
+        col_b.metric("🌍 적용 지역", selected_region)
+        
+        # 작업 기간 동안 혹서기 일수 예상 (7-8월 기준)
+        estimated_heat = get_total_non_work_days(selected_region, 7, 8)
+        col_c.metric("🔥 여름철 혹서기", f"{estimated_heat:.1f}일")
+        
+        st.info(f"""
+        **📍 {selected_region} 지역 기상 정보**
+        - 연간 혹서기 비작업일수: {annual_heat_days:.1f}일
+        - 7-8월 혹서기: {estimated_heat:.1f}일
+        - TAB 4에서 상세 공기 계산 가능
+        """)
     else:
         st.warning("TAB 2에서 엑셀을 먼저 업로드해주세요.")
 
