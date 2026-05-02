@@ -72,6 +72,12 @@ GUIDELINE_APPENDIX = {
     "조립식 PC맨홀": {"daily": 3, "unit": "개소/일"},
     "GRP맨홀": {"daily": 2, "unit": "개소/일"},
     
+    # 배수설비
+    "빗물받이": {"daily": 5, "unit": "개소/일"},
+    "집수받이": {"daily": 4, "unit": "개소/일"},
+    "우수토실": {"daily": 3, "unit": "개소/일"},
+    "배수설비": {"daily": 4, "unit": "개소/일"},
+    
     # 가시설공
     "조립식 간이 흙막이": {"daily": 50, "unit": "㎡/일"},
     "H-PILE 항타": {"daily": 8, "unit": "본/일"},
@@ -535,7 +541,7 @@ with tab2:
                         hierarchy.append(current_category)
                 
                 if hierarchy:
-                    # 대공종별 그룹핑
+                    # 중간 번호 기준 그룹핑 (1.1.X, 1.2.X, 2.1.X... 구분)
                     major_groups = {}
                     seen_cats = {}  # 중복 제거용
                     
@@ -549,39 +555,45 @@ with tab2:
                             continue
                         seen_cats[cat_key] = True
                         
-                        # 대공종 번호 추출 (1.1.1 → 1)
-                        major_num = level.split('.')[0]
-                        if major_num not in major_groups:
-                            major_groups[major_num] = []
-                        major_groups[major_num].append(cat)
+                        # 중간 번호 추출 (1.1.X → "1.1")
+                        parts = level.split('.')
+                        if len(parts) >= 2:
+                            major_key = f"{parts[0]}.{parts[1]}"  # "1.1", "1.2", "2.1" 등
+                        else:
+                            major_key = parts[0]
+                        
+                        if major_key not in major_groups:
+                            major_groups[major_key] = []
+                        major_groups[major_key].append(cat)
                     
-                    # 각 대공종 내에서 번호 순서 정렬
-                    for major_num in major_groups:
-                        major_groups[major_num].sort(key=lambda x: tuple(int(p) for p in x['level'].split('.')))
+                    # 각 그룹 내에서 번호 순서 정렬
+                    for major_key in major_groups:
+                        major_groups[major_key].sort(key=lambda x: tuple(int(p) for p in x['level'].split('.')))
                     
-                    st.info(f"✅ {len(major_groups)}개 대공종, {sum(len(v) for v in major_groups.values())}개 주공종 인식")
+                    st.info(f"✅ {len(major_groups)}개 공종 그룹, {sum(len(v) for v in major_groups.values())}개 주공종 인식")
                     
-                    # 대공종별 탭 생성
+                    # 그룹명 정의
                     major_names = {
-                        "1": "토목공사",
-                        "2": "기계설비",
-                        "3": "전기공사",
-                        "4": "건축공사",
-                        "5": "조경공사",
+                        "1.1": "🏗️ 하수관로공사",
+                        "1.2": "🔧 관로 부대공사",
+                        "2.1": "💧 배수설비공사",
+                        "2.2": "⚙️ 기계설비",
+                        "3.1": "⚡ 전기공사",
                     }
                     
-                    tab_labels = [f"📁 {num}. {major_names.get(num, f'{num}번 공종')}" 
-                                  for num in sorted(major_groups.keys(), key=lambda x: int(x))]
+                    # 탭 생성
+                    sorted_keys = sorted(major_groups.keys(), key=lambda x: tuple(int(p) for p in x.split('.')))
+                    tab_labels = [major_names.get(key, f"📁 {key}") for key in sorted_keys]
                     
                     major_tabs = st.tabs(tab_labels)
                     
                     all_crew_settings = {}
                     
-                    for tab_idx, (major_num, major_tab) in enumerate(zip(sorted(major_groups.keys(), key=lambda x: int(x)), major_tabs)):
+                    for tab_idx, (major_key, major_tab) in enumerate(zip(sorted_keys, major_tabs)):
                         with major_tab:
-                            cats_in_major = major_groups[major_num]
+                            cats_in_major = major_groups[major_key]
                             
-                            st.markdown(f"### 🔧 {major_names.get(major_num, f'{major_num}번 공종')} 투입조수 설정")
+                            st.markdown(f"### 🔧 투입조수 설정")
                             
                             if 'crew_by_main' not in st.session_state:
                                 st.session_state['crew_by_main'] = {}
@@ -601,7 +613,7 @@ with tab2:
                                         min_value=1,
                                         max_value=30,
                                         value=default_crew,
-                                        key=f"crew_{major_num}_{idx}"
+                                        key=f"crew_{major_key.replace('.', '_')}_{idx}"
                                     )
                                     all_crew_settings[cat_name] = crew_val
                                     st.session_state['crew_by_main'][cat_full] = crew_val
