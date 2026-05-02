@@ -535,6 +535,7 @@ with tab2:
                     spec = str(row[2]).strip() if len(row) > 2 and row[2] else ""
                     
                     if re.match(r'^\d+\.\d+\.\d+$', gong_jong):
+                        # 같은 level이라도 name이 다르면 새로운 카테고리
                         if current_category:
                             if current_sub_category:
                                 current_category['sub_categories'].append(current_sub_category)
