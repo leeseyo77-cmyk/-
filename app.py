@@ -537,15 +537,29 @@ with tab2:
                 if hierarchy:
                     # 대공종별 그룹핑
                     major_groups = {}
+                    seen_cats = {}  # 중복 제거용
+                    
                     for cat in hierarchy:
                         level = cat['level']
+                        name = cat['name']
+                        
+                        # 중복 체크 (level + name)
+                        cat_key = f"{level}_{name}"
+                        if cat_key in seen_cats:
+                            continue
+                        seen_cats[cat_key] = True
+                        
                         # 대공종 번호 추출 (1.1.1 → 1)
                         major_num = level.split('.')[0]
                         if major_num not in major_groups:
                             major_groups[major_num] = []
                         major_groups[major_num].append(cat)
                     
-                    st.info(f"✅ {len(major_groups)}개 대공종, {len(hierarchy)}개 주공종 인식")
+                    # 각 대공종 내에서 번호 순서 정렬
+                    for major_num in major_groups:
+                        major_groups[major_num].sort(key=lambda x: tuple(int(p) for p in x['level'].split('.')))
+                    
+                    st.info(f"✅ {len(major_groups)}개 대공종, {sum(len(v) for v in major_groups.values())}개 주공종 인식")
                     
                     # 대공종별 탭 생성
                     major_names = {
