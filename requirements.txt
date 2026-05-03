@@ -1,8 +1,4 @@
-echo streamlit > requirements.txt
-echo pandas >> requirements.txt
-echo openpyxl >> requirements.txt
-echo plotly >> requirements.txt
-
-git add requirements.txt
-git commit -m "add: requirements.txt"
-git push origin HEAD:master
+streamlit>=1.31.0
+pandas>=2.0.0
+openpyxl>=3.1.0
+plotly>=5.18.0
