@@ -746,7 +746,7 @@ def main():
         
         else:
             # 트리 형식
-            render_tree(district_data["tree"], labor_dict=district_data["labor"])
+            # render_tree(district_data["tree"], labor_dict=district_data["labor"])
     
     # ========================================================================
     # TAB 3: 종합 요약
