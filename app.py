@@ -1,4 +1,4 @@
-# VERSION 3.0 - 지구별 분리 + 전체 TAB
+# VERSION 3.0 - 지구별 분리 + 전체 TAB + 비작업일수 계산 수정본
 import streamlit as st
 import pandas as pd
 import openpyxl
@@ -9,662 +9,618 @@ from datetime import datetime, timedelta
 st.set_page_config(page_title="상하수도 공기산정", layout="wide", initial_sidebar_state="expanded")
 
 # ============================================================================
-# 임포트
+# 원본=
 # ============================================================================
 try:
     from guideline_data import PAVEMENT
-    from weather_data import HEAT_DAYS, REGIONS, get_heat_days_by_region, get_total_non_work_days
-except ImportError:
-    st.warning("guideline_data.py 또는 weather_data.py 파일이 없습니다.")
-    PAVEMENT = {}
-    HEAT_DAYS = {}
-    REGIONS = ["서울"]
-    def get_heat_days_by_region(region, month=None):
-        return 0.0
-    def get_total_non_work_days(region, start, end):
-        return 0.0
+    from weather_data import REGION_MAPPING, get_total_non_work_days, get_monthly_breakdown
+    MODULES_LOADED = True
+except ImportError as e:
+    st.error(f"⚠️ 필수 모듈 로드 실패: {e}")
+    st.error("weather_data.py와 guideline_data.py 파일을 확인해주세요.")
+    MODULES_LOADED = False
 
 # ============================================================================
-# 파싱 함수
+# 상수 정의
 # ============================================================================
 
-def parse_excel_tree(ws):
-    """엑셀을 트리 구조로 파싱"""
-    current_path = {
-        'roman': None,
-        'level1': None,
-        'level2': None,
-        'level3': None,
-        'sub1': None,
-    }
+VERSION = "3.0"
+
+# 키워드 맵 (상세 분류용)
+KEYWORD_MAP_DETAIL = {
+    "토공": ["토공", "굴착", "되메우기", "성토", "절토", "터파기"],
+    "관로공": ["관로공", "관거", "배관", "관 부설", "상수관로", "하수관로"],
+    "구조물공": ["구조물", "맨홀", "우수받이", "집수정", "밸브", "배수로"],
+    "포장공": ["포장", "아스팔트", "콘크리트포장", "보도블럭", "차도"],
+    "부대공": ["부대공", "안전시설", "가설공사", "교통관리"],
+    "기타": ["기타", "잡"]
+}
+
+# 공종별 표준 투입조수 (기본값)
+DEFAULT_LABOR = {
+    "토공": 5,
+    "관로공": 8,
+    "구조물공": 10,
+    "포장공": 7,
+    "부대공": 4,
+    "기타": 3
+}
+
+# ============================================================================
+# 유틸리티 함수
+# ============================================================================
+
+def extract_district_roman(text):
+    """
+    텍스트에서 로마숫자 지구 번호 추출
+    예: "Ⅰ. 제1지구" → "Ⅰ"
+    """
+    if not isinstance(text, str):
+        return None
     
-    tree = {}
+    roman_pattern = r'^([ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩ]+)\.'
+    match = re.match(roman_pattern, text.strip())
+    if match:
+        return match.group(1)
+    return None
+
+
+def classify_work_type(name):
+    """
+    공종명으로 분류 (토공, 관로공, 구조물공, 포장공, 부대공, 기타)
+    """
+    if not isinstance(name, str):
+        return "기타"
     
-    for row in ws.iter_rows(min_row=1, values_only=True):
-        col_a = str(row[0]).strip() if row[0] else ""
-        col_b = str(row[1]).strip() if row[1] else ""
-        col_c = str(row[2]).strip() if row[2] else ""
-        col_d = row[3] if row[3] else ""
-        col_e = str(row[4]).strip() if row[4] else ""
+    name_clean = name.strip()
+    
+    for work_type, keywords in KEYWORD_MAP_DETAIL.items():
+        for keyword in keywords:
+            if keyword in name_clean:
+                return work_type
+    
+    return "기타"
+
+
+def is_valid_work_item(daily_work, quantity):
+    """
+    정상적인 작업 항목인지 검증
+    - daily_work >= 1
+    - quantity > 0
+    """
+    try:
+        daily = float(daily_work) if daily_work is not None else 0
+        qty = float(quantity) if quantity is not None else 0
+        return daily >= 1.0 and qty > 0
+    except (ValueError, TypeError):
+        return False
+
+
+# ============================================================================
+# 엑셀 파싱 함수
+# ============================================================================
+
+def parse_excel_tree(file_path):
+    """
+    엑셀을 트리 구조로 파싱 (지구별 분리)
+    
+    Returns:
+        dict: {
+            "Ⅰ": {"name": "제1지구", "tree": [...], "labor": {...}},
+            "Ⅱ": {"name": "제2지구", "tree": [...], "labor": {...}},
+            ...
+        }
+    """
+    wb = openpyxl.load_workbook(file_path, data_only=True)
+    ws = wb.active
+    
+    districts = {}
+    current_district = None
+    current_tree = []
+    
+    # 계층 스택 (depth별 최근 노드 추적)
+    stack = {}
+    
+    for row in ws.iter_rows(min_row=2, values_only=False):
+        # A열: 번호, B열: 공종명, C열: 규격, D열: 단위, E열: 수량, F열: 일일작업량, G열: 소요일수
+        num_cell = row[0]
+        name_cell = row[1]
+        spec_cell = row[2] if len(row) > 2 else None
+        unit_cell = row[3] if len(row) > 3 else None
+        qty_cell = row[4] if len(row) > 4 else None
+        daily_cell = row[5] if len(row) > 5 else None
+        days_cell = row[6] if len(row) > 6 else None
         
-        if not col_a and not col_b:
+        num_val = num_cell.value if num_cell else None
+        name_val = name_cell.value if name_cell else None
+        
+        if not name_val:
             continue
         
-        # 로마숫자
-        if col_a.startswith('Ⅰ') or col_a.startswith('Ⅱ') or col_a.startswith('Ⅲ') or col_a.startswith('Ⅳ') or col_a.startswith('Ⅴ'):
-            current_path = {k: None for k in current_path}
-            current_path['roman'] = col_a
-            tree[col_a] = {'name': col_b, 'children': {}}
-            continue
-        
-        # 1., 2.
-        if re.match(r'^\d+\.$', col_a):
-            current_path['level1'] = col_a.rstrip('.')
-            current_path['level2'] = None
-            current_path['level3'] = None
-            current_path['sub1'] = None
-            
-            roman = current_path['roman']
-            if roman and roman in tree:
-                tree[roman]['children'][current_path['level1']] = {'name': col_b, 'children': {}}
-            continue
-        
-        # 1.1, 1.2
-        if re.match(r'^\d+\.\d+$', col_a) and col_a.count('.') == 1:
-            current_path['level2'] = col_a
-            current_path['level3'] = None
-            current_path['sub1'] = None
-            
-            roman = current_path['roman']
-            lv1 = current_path['level1']
-            if roman and lv1 and roman in tree and lv1 in tree[roman]['children']:
-                tree[roman]['children'][lv1]['children'][col_a] = {'name': col_b, 'children': {}}
-            continue
-        
-        # 1.1.1 (공종)
-        if re.match(r'^\d+\.\d+\.\d+$', col_a):
-            current_path['level3'] = col_a
-            current_path['sub1'] = None
-            
-            roman = current_path['roman']
-            lv1 = current_path['level1']
-            lv2 = current_path['level2']
-            if roman and lv1 and lv2:
-                if roman in tree and lv1 in tree[roman]['children'] and lv2 in tree[roman]['children'][lv1]['children']:
-                    tree[roman]['children'][lv1]['children'][lv2]['children'][col_a] = {
-                        'name': col_b,
-                        'items': [],
-                        'sub_categories': {}
+        # 로마숫자 지구 감지
+        district_roman = extract_district_roman(str(name_val))
+        if district_roman:
+            # 새 지구 시작
+            if current_district and current_tree:
+                # 이전 지구 저장
+                if current_district not in districts:
+                    districts[current_district] = {
+                        "name": districts.get(current_district, {}).get("name", f"제{current_district}지구"),
+                        "tree": [],
+                        "labor": DEFAULT_LABOR.copy()
                     }
+                districts[current_district]["tree"] = current_tree
+            
+            current_district = district_roman
+            current_tree = []
+            stack = {}
+            
+            if current_district not in districts:
+                districts[current_district] = {
+                    "name": str(name_val).replace(f"{district_roman}.", "").strip(),
+                    "tree": [],
+                    "labor": DEFAULT_LABOR.copy()
+                }
             continue
         
-        # 1), 2)
-        if re.match(r'^\d+\)$', col_a):
-            current_path['sub1'] = col_a
-            
-            roman = current_path['roman']
-            lv1 = current_path['level1']
-            lv2 = current_path['level2']
-            lv3 = current_path['level3']
-            if roman and lv1 and lv2 and lv3:
-                if (roman in tree and lv1 in tree[roman]['children'] and 
-                    lv2 in tree[roman]['children'][lv1]['children'] and
-                    lv3 in tree[roman]['children'][lv1]['children'][lv2]['children']):
-                    tree[roman]['children'][lv1]['children'][lv2]['children'][lv3]['sub_categories'][col_a] = {
-                        'name': col_b,
-                        'items': []
-                    }
+        # 지구가 설정되지 않은 경우 스킵
+        if current_district is None:
             continue
         
-        # (1), (2) - 무시
-        if re.match(r'^\(\d+\)$', col_a):
-            continue
+        # 번호 체계로 depth 계산
+        depth = 0
+        num_str = str(num_val).strip() if num_val else ""
         
-        # 항목
-        if not col_a and col_b:
-            roman = current_path['roman']
-            lv1 = current_path['level1']
-            lv2 = current_path['level2']
-            lv3 = current_path['level3']
-            sub1 = current_path['sub1']
-            
-            if not (roman and lv1 and lv2 and lv3):
-                continue
-            
-            qty = 0
-            try:
-                if col_d:
-                    qty = float(str(col_d).replace(',', ''))
-            except:
-                pass
-            
-            item = {
-                'name': col_b,
-                'spec': col_c,
-                'qty': qty,
-                'unit': col_e
-            }
-            
-            if sub1:
-                if (roman in tree and lv1 in tree[roman]['children'] and 
-                    lv2 in tree[roman]['children'][lv1]['children'] and
-                    lv3 in tree[roman]['children'][lv1]['children'][lv2]['children'] and
-                    sub1 in tree[roman]['children'][lv1]['children'][lv2]['children'][lv3]['sub_categories']):
-                    tree[roman]['children'][lv1]['children'][lv2]['children'][lv3]['sub_categories'][sub1]['items'].append(item)
+        if re.match(r'^\d+$', num_str):  # "1", "2" → depth 0
+            depth = 0
+        elif re.match(r'^\d+\.\d+$', num_str):  # "1.1", "1.2" → depth 1
+            depth = 1
+        elif re.match(r'^\d+\.\d+\.\d+$', num_str):  # "1.1.1" → depth 2
+            depth = 2
+        elif re.match(r'^\d+\)$', num_str):  # "1)", "2)" → depth 3
+            depth = 3
+        elif re.match(r'^\(\d+\)$', num_str):  # "(1)", "(2)" → depth 4
+            depth = 4
+        
+        # 데이터 추출
+        spec = spec_cell.value if spec_cell else ""
+        unit = unit_cell.value if unit_cell else ""
+        quantity = qty_cell.value if qty_cell else 0
+        daily_work = daily_cell.value if daily_cell else 0
+        work_days = days_cell.value if days_cell else 0
+        
+        # 노드 생성
+        node = {
+            "number": num_str,
+            "name": str(name_val),
+            "spec": spec,
+            "unit": unit,
+            "quantity": quantity,
+            "daily_work": daily_work,
+            "work_days": work_days,
+            "depth": depth,
+            "children": [],
+            "work_type": classify_work_type(str(name_val)),
+            "valid": is_valid_work_item(daily_work, quantity)
+        }
+        
+        # 트리 구조 연결
+        if depth == 0:
+            current_tree.append(node)
+            stack[depth] = node
+        else:
+            parent_depth = depth - 1
+            if parent_depth in stack:
+                stack[parent_depth]["children"].append(node)
             else:
-                if (roman in tree and lv1 in tree[roman]['children'] and 
-                    lv2 in tree[roman]['children'][lv1]['children'] and
-                    lv3 in tree[roman]['children'][lv1]['children'][lv2]['children']):
-                    tree[roman]['children'][lv1]['children'][lv2]['children'][lv3]['items'].append(item)
+                # 부모를 찾을 수 없으면 루트에 추가
+                current_tree.append(node)
+            stack[depth] = node
     
-    return tree
+    # 마지막 지구 저장
+    if current_district and current_tree:
+        if current_district not in districts:
+            districts[current_district] = {
+                "name": f"제{current_district}지구",
+                "tree": [],
+                "labor": DEFAULT_LABOR.copy()
+            }
+        districts[current_district]["tree"] = current_tree
+    
+    wb.close()
+    return districts
 
 
-def flatten_categories(tree):
-    """트리를 공종 리스트로 변환"""
-    categories = []
+def calculate_total_days(tree, labor_dict):
+    """
+    트리에서 총 공기 계산 (병렬 작업 고려)
+    """
+    total_days = 0
     
-    for roman_key, roman_data in tree.items():
-        for lv1_key, lv1_data in roman_data.get('children', {}).items():
-            for lv2_key, lv2_data in lv1_data.get('children', {}).items():
-                for lv3_key, lv3_data in lv2_data.get('children', {}).items():
-                    full_path = f"{roman_key} > {lv1_key}. {lv1_data['name']} > {lv2_key} {lv2_data['name']}"
-                    
-                    categories.append({
-                        'roman': roman_key,
-                        'roman_name': roman_data['name'],
-                        'level': lv3_key,
-                        'name': lv3_data['name'],
-                        'full_path': full_path,
-                        'items': lv3_data.get('items', []),
-                        'sub_categories': lv3_data.get('sub_categories', {})
-                    })
+    def traverse(nodes):
+        nonlocal total_days
+        for node in nodes:
+            if node["valid"]:
+                work_type = node["work_type"]
+                labor = labor_dict.get(work_type, DEFAULT_LABOR.get(work_type, 5))
+                days = node["work_days"] / labor if labor > 0 else node["work_days"]
+                total_days += days
+            
+            if node["children"]:
+                traverse(node["children"])
     
-    return categories
+    traverse(tree)
+    return int(total_days)
 
 
-def calc_work_days(item_name, item_spec, qty, unit):
-    """작업일수 계산"""
-    if not qty or qty <= 0:
-        return 0, None
+# ============================================================================
+# UI 렌더링 함수
+# ============================================================================
+
+def render_tree(tree, depth=0, labor_dict=None):
+    """
+    트리를 계층적으로 표시 (Streamlit)
+    """
+    if labor_dict is None:
+        labor_dict = DEFAULT_LABOR
     
-    name_no_space = item_name.replace(" ", "")
-    
-    # 1. 이름 + 스펙
-    full_key = f"{item_name} {item_spec}".strip()
-    if full_key in PAVEMENT:
-        daily = PAVEMENT[full_key].get('daily', 0)
-        # 비정상적인 값 무시 (하루 작업량이 1 미만이면 이상함)
-        if daily >= 1:
-            days = max(1, round(qty / daily))
-            return days, f"{daily}{unit}/일"
-    
-    # 2. 이름만
-    if item_name in PAVEMENT:
-        daily = PAVEMENT[item_name].get('daily', 0)
-        if daily >= 1:
-            days = max(1, round(qty / daily))
-            return days, f"{daily}{unit}/일"
-    
-    # 3. 공백 제거
-    if name_no_space in PAVEMENT:
-        daily = PAVEMENT[name_no_space].get('daily', 0)
-        if daily >= 1:
-            days = max(1, round(qty / daily))
-            return days, f"{daily}{unit}/일"
-    
-    # 4. 부분 매칭
-    for key in PAVEMENT:
-        if key in item_name or item_name in key:
-            daily = PAVEMENT[key].get('daily', 0)
-            if daily >= 1:
-                days = max(1, round(qty / daily))
-                return days, f"{daily}{unit}/일"
-    
-    return 0, None
+    for node in tree:
+        indent = "　" * depth
+        number = node["number"]
+        name = node["name"]
+        work_days = node["work_days"]
+        work_type = node["work_type"]
+        valid = node["valid"]
+        
+        # 유효하지 않은 항목은 회색으로
+        if not valid:
+            st.markdown(f"{indent}`{number}` {name} <span style='color:gray'>({work_days}일 - 제외됨)</span>", unsafe_allow_html=True)
+        else:
+            labor = labor_dict.get(work_type, DEFAULT_LABOR.get(work_type, 5))
+            adjusted_days = work_days / labor if labor > 0 else work_days
+            st.markdown(f"{indent}**{number}** {name} ({work_days}일 → {adjusted_days:.1f}일, 투입: {labor}조)")
+        
+        if node["children"]:
+            render_tree(node["children"], depth + 1, labor_dict)
+
 
 # ============================================================================
 # 메인 앱
 # ============================================================================
 
-st.title("🏗️ 상하수도 공사 공기산정")
-
-# 사이드바
-with st.sidebar:
-    st.header("📤 파일 업로드")
-    uploaded_file = st.file_uploader("엑셀 파일 업로드", type=['xlsx'])
-
-if not uploaded_file:
-    st.info("👈 왼쪽에서 엑셀 파일을 업로드하세요!")
-    st.stop()
-
-# 엑셀 읽기
-try:
-    wb = openpyxl.load_workbook(uploaded_file, data_only=True)
-    ws = wb['설계내역서']
-except Exception as e:
-    st.error(f"엑셀 파일 읽기 실패: {e}")
-    st.stop()
-
-# 파싱
-with st.spinner("엑셀 파일 분석 중..."):
-    tree = parse_excel_tree(ws)
-    categories = flatten_categories(tree)
-
-st.success(f"✅ {len(categories)}개 공종 파싱 완료!")
-
-# ============================================================================
-# TAB 구조
-# ============================================================================
-
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "📋 공기산정",
-    "📂 엑셀 내역서 인식",
-    "🔍 주요공종 CP 분석",
-    "🌧 비작업일수 계산기",
-    "📄 공기산정 보고서"
-])
-
-# ============================================================================
-# TAB 2: 상세 분석
-# ============================================================================
-with tab2:
-    st.header("📊 상세 분석")
+def main():
+    st.title("🏗️ 상하수도 공사 공기산정")
+    st.caption(f"VERSION {VERSION}")
     
-    # 투입조수 설정 초기화
-    if 'crew_settings' not in st.session_state:
-        st.session_state['crew_settings'] = {}
+    # 사이드바: 파일 업로드
+    with st.sidebar:
+        st.header("⚙️ 기본 설정")
+        
+        uploaded_file = st.file_uploader(
+            "📂 공사 유형",
+            type=["xlsx"],
+            help="200MB per file • XLSX"
+        )
+        
+        st.info("💡 원액셀서 액셀 파일을 업로드하세요!")
     
-    # 지구별로 그룹핑
-    for roman_key in sorted(tree.keys()):
-        roman_data = tree[roman_key]
+    # 파일 업로드 전
+    if uploaded_file is None:
+        st.warning("👈 원액셀서 액셀 파일을 먼저 업로드하세요!")
+        return
+    
+    # 파일 저장 및 파싱
+    try:
+        file_path = f"/tmp/{uploaded_file.name}"
+        with open(file_path, "wb") as f:
+            f.write(uploaded_file.getbuffer())
         
-        st.markdown(f"## 📍 {roman_key} {roman_data['name']}")
+        districts_data = parse_excel_tree(file_path)
         
-        # 해당 지구의 공종만 필터링
-        district_categories = []
-        for cat in categories:
-            if cat['full_path'].startswith(roman_key):
-                district_categories.append(cat)
+        if not districts_data:
+            st.error("❌ 지구 정보를 찾을 수 없습니다. 엑셀 형식을 확인해주세요.")
+            return
         
-        # 이 지구의 투입조수 설정
-        st.markdown("### 🔧 투입조수 설정")
+        st.success(f"✅ {len(districts_data)}개 지구 파싱 완료!")
         
-        # 변경 감지를 위한 임시 변수
-        changed = False
+    except Exception as e:
+        st.error(f"❌ 파일 파싱 중 오류 발생: {e}")
+        return
+    
+    # TAB 구성
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        "📋 개요",
+        "📂 지구별 상세",
+        "📊 종합 요약",
+        "☂️ 비작업일수 계산기",
+        "📅 공정표"
+    ])
+    
+    # ========================================================================
+    # TAB 1: 개요
+    # ========================================================================
+    with tab1:
+        st.header("📋 공기산정 요약")
         
-        cols = st.columns(min(len(district_categories), 4))
+        st.subheader("🌍 지구 선택")
+        district_names = {k: v["name"] for k, v in districts_data.items()}
+        selected_district_key = st.selectbox(
+            "지역 지역 선택",
+            options=list(district_names.keys()),
+            format_func=lambda x: f"{x}. {district_names[x]}"
+        )
         
-        for idx, cat in enumerate(district_categories):
-            work_key = f"{roman_key}_{cat['level']} {cat['name']}"
-            default_crew = st.session_state['crew_settings'].get(work_key, 3)
-            
-            with cols[idx % len(cols)]:
-                crew_val = st.number_input(
-                    f"{cat['level']} {cat['name']}",
+        selected_data = districts_data[selected_district_key]
+        
+        st.subheader("⚙️ 기본 설정")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            region_name = st.selectbox(
+                "공사 지역 선택",
+                options=list(REGION_MAPPING.keys()) if MODULES_LOADED else ["서울"],
+                index=0
+            )
+        
+        with col2:
+            start_date = st.date_input(
+                "공사 시작일",
+                value=datetime(2026, 12, 25)
+            )
+        
+        # 투입조수 설정
+        st.subheader("👷 투입조수 설정")
+        labor_dict = selected_data["labor"].copy()
+        
+        cols = st.columns(3)
+        for idx, (work_type, default_val) in enumerate(DEFAULT_LABOR.items()):
+            with cols[idx % 3]:
+                labor_dict[work_type] = st.number_input(
+                    f"{work_type}",
                     min_value=1,
-                    max_value=30,
-                    value=default_crew,
+                    max_value=50,
+                    value=labor_dict.get(work_type, default_val),
                     step=1,
-                    key=f"crew_{roman_key}_{idx}",
-                    help="투입조수 (1~30조)"
+                    key=f"labor_{selected_district_key}_{work_type}"
                 )
-                # 값이 변경되었는지 확인
-                if st.session_state['crew_settings'].get(work_key, 3) != crew_val:
-                    changed = True
-                st.session_state['crew_settings'][work_key] = crew_val
         
-        st.markdown("---")
+        # 순공기 계산
+        pure_days = calculate_total_days(selected_data["tree"], labor_dict)
         
-        # 공종 리스트 표시
-        for cat in district_categories:
-            # 투입조수 가져오기
-            work_key = f"{roman_key}_{cat['level']} {cat['name']}"
-            crew = st.session_state['crew_settings'].get(work_key, 3)
-            
-            # 총 작업일수 계산
-            total_days = 0
-            item_count = 0
-            
-            # 직접 항목
-            for item in cat['items']:
-                days, _ = calc_work_days(item['name'], item.get('spec', ''), item.get('qty', 0), item.get('unit', ''))
-                total_days += max(1, round(days / crew))  # 투입조수로 나누기
-                if item.get('qty', 0) > 0:
-                    item_count += 1
-            
-            # sub_category 항목
-            sub_days_map = {}
-            for sub_key, sub_data in cat['sub_categories'].items():
-                sub_days = 0
-                for item in sub_data.get('items', []):
-                    days, _ = calc_work_days(item['name'], item.get('spec', ''), item.get('qty', 0), item.get('unit', ''))
-                    sub_days += max(1, round(days / crew))  # 투입조수로 나누기
-                    if item.get('qty', 0) > 0:
-                        item_count += 1
-                sub_days_map[sub_key] = sub_days
-                total_days += sub_days
-            
-            # Expander
-            with st.expander(f"▶ {cat['level']} {cat['name']} - {total_days}일 ({crew}조, {item_count}개)", expanded=False):
-                
-                # Sub-categories
-                for sub_key in sorted(cat['sub_categories'].keys()):
-                    sub_data = cat['sub_categories'][sub_key]
-                    sub_days = sub_days_map.get(sub_key, 0)
-                    
-                    st.markdown(f"### {sub_key} {sub_data['name']} ({sub_days}일)")
-                    
-                    # 항목 테이블
-                    if sub_data.get('items'):
-                        rows = []
-                        for item in sub_data['items']:
-                            days, rate = calc_work_days(item['name'], item.get('spec', ''), item.get('qty', 0), item.get('unit', ''))
-                            adjusted_days = max(1, round(days / crew))
-                            rows.append({
-                                '세부공종': item['name'],
-                                '규격': item.get('spec', ''),
-                                '수량': f"{item.get('qty', 0):,.1f}",
-                                '단위': item.get('unit', ''),
-                                '1일작업량': rate or '-',
-                                '작업일수(1조)': days,
-                                f'작업일수({crew}조)': adjusted_days,
-                                '출처': '가이드라인' if rate else '-'
-                            })
-                        
-                        if rows:
-                            df = pd.DataFrame(rows)
-                            st.dataframe(df, use_container_width=True, hide_index=True)
-                
-                # 직접 항목
-                if cat['items']:
-                    st.markdown("### 직접 항목")
-                    rows = []
-                    for item in cat['items']:
-                        days, rate = calc_work_days(item['name'], item.get('spec', ''), item.get('qty', 0), item.get('unit', ''))
-                        adjusted_days = max(1, round(days / crew))
-                        rows.append({
-                            '세부공종': item['name'],
-                            '규격': item.get('spec', ''),
-                            '수량': f"{item.get('qty', 0):,.1f}",
-                            '단위': item.get('unit', ''),
-                            '1일작업량': rate or '-',
-                            '작업일수(1조)': days,
-                            f'작업일수({crew}조)': adjusted_days,
-                            '출처': '가이드라인' if rate else '-'
-                        })
-                    
-                    if rows:
-                        df = pd.DataFrame(rows)
-                        st.dataframe(df, use_container_width=True, hide_index=True)
+        # 비작업일수 계산
+        if MODULES_LOADED:
+            end_date = start_date + timedelta(days=pure_days)
+            non_work_days = get_total_non_work_days(region_name, start_date, end_date)
+        else:
+            non_work_days = 0
         
-        st.markdown("---")  # 지구 구분선
-    
-    # 세션 저장
-    st.session_state["tree"] = tree
-    st.session_state["categories"] = categories
-
-# ============================================================================
-# TAB 1: 공기산정 요약
-# ============================================================================
-with tab1:
-    st.subheader("📋 공기산정 요약")
-    
-    st.markdown("### 📊 전체 공기 요약")
-    
-    total_work_days = 0
-    
-    # 투입조수 설정 확인
-    if 'crew_settings' not in st.session_state:
-        st.session_state['crew_settings'] = {}
-    
-    # 전체 작업일수 계산 (투입조수 반영)
-    for cat in categories:
-        work_key = f"{cat['roman']}_{cat['level']} {cat['name']}"
-        crew = st.session_state['crew_settings'].get(work_key, 3)
+        total_days = pure_days + non_work_days
+        final_end_date = start_date + timedelta(days=total_days)
         
-        for item in cat['items']:
-            days, _ = calc_work_days(item['name'], item.get('spec', ''), item.get('qty', 0), item.get('unit', ''))
-            total_work_days += max(1, round(days / crew))
+        # 결과 표시
+        st.divider()
+        st.subheader("📊 산정 결과")
         
-        for sub_data in cat['sub_categories'].values():
-            for item in sub_data.get('items', []):
-                days, _ = calc_work_days(item['name'], item.get('spec', ''), item.get('qty', 0), item.get('unit', ''))
-                total_work_days += max(1, round(days / crew))
+        metric_cols = st.columns(4)
+        with metric_cols[0]:
+            st.metric("순공기", f"{pure_days}일")
+        with metric_cols[1]:
+            st.metric("비작업일수", f"{non_work_days}일")
+        with metric_cols[2]:
+            st.metric("총 공기", f"{total_days}일")
+        with metric_cols[3]:
+            st.metric("예상 완공일", final_end_date.strftime("%y.%m.%d"))
     
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.metric("🔴 총 작업일수", f"{total_work_days}일")
-    with col2:
-        st.metric("📁 총 공종", f"{len(categories)}개")
-    with col3:
-        st.metric("🏗️ 지구", f"{len(tree)}개")
-    
-    st.info("📌 TAB 2에서 상세 내역을 확인하세요!")
-
-# ============================================================================
-# TAB 3: CP 분석
-# ============================================================================
-with tab3:
-    st.subheader("🔍 주요공종 CP 분석")
-    st.info("🚧 준비중입니다")
-
-# ============================================
-# TAB 4: 비작업일수 계산기
-# ============================================
-with tab4:
-    st.header("☂️ 비작업일수 계산기")
-    
-    st.markdown("""
-    공사 기간 중 기후 조건에 따른 비작업일수를 계산합니다.
-    - **강우일**: 일 강수량 기준 작업 불가일
-    - **한랭일**: 일 최저기온 -10°C 이하
-    - **폭염일**: 일 최고기온 33°C 이상
-    """)
-    
-    # 기본 설정
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        calc_start_date = st.date_input(
-            "공사 시작일",
-            value=datetime(2026, 12, 25),
-            help="공사가 시작되는 날짜를 선택하세요"
+    # ========================================================================
+    # TAB 2: 지구별 상세
+    # ========================================================================
+    with tab2:
+        st.header("📂 지구별 상세 내역")
+        
+        tab_district = st.selectbox(
+            "지구 선택",
+            options=list(district_names.keys()),
+            format_func=lambda x: f"{x}. {district_names[x]}",
+            key="tab2_district"
         )
+        
+        district_data = districts_data[tab_district]
+        
+        st.subheader(f"{tab_district}. {district_data['name']}")
+        
+        # 트리 표시
+        render_tree(district_data["tree"], labor_dict=district_data["labor"])
     
-    with col2:
-        calc_region = st.selectbox(
-            "지역 선택",
-            options=list(REGION_MAPPING.keys()),
-            index=0,
-            help="공사 지역을 선택하세요"
-        )
+    # ========================================================================
+    # TAB 3: 종합 요약
+    # ========================================================================
+    with tab3:
+        st.header("📊 종합 요약")
+        
+        summary_data = []
+        for district_key, district_info in districts_data.items():
+            days = calculate_total_days(district_info["tree"], district_info["labor"])
+            summary_data.append({
+                "지구": f"{district_key}. {district_info['name']}",
+                "순공기": days
+            })
+        
+        df_summary = pd.DataFrame(summary_data)
+        st.dataframe(df_summary, use_container_width=True, hide_index=True)
+        
+        st.metric("전체 순공기 합계", f"{df_summary['순공기'].sum()}일")
     
-    work_days_input = st.number_input(
-        "순공기(작업일수)",
-        min_value=1,
-        max_value=10000,
-        value=1200,
-        step=10,
-        help="실제 작업이 필요한 일수를 입력하세요"
-    )
-    
-    # ✅ 기후 조건 체크박스 추가
-    st.subheader("🌦️ 기후 조건 선택")
-    st.caption("제외할 기후 조건을 선택하세요")
-    
-    col_a, col_b, col_c = st.columns(3)
-    
-    with col_a:
-        check_rain = st.checkbox(
-            "💧 강우일 제외", 
-            value=True,
-            help="강수량 기준 작업 불가일을 포함합니다"
-        )
-    
-    with col_b:
-        check_cold = st.checkbox(
-            "❄️ 한랭일 제외", 
-            value=True,
-            help="일 최저기온 -10°C 이하인 날을 포함합니다"
-        )
-    
-    with col_c:
-        check_hot = st.checkbox(
-            "🌡️ 폭염일 제외", 
-            value=True,
-            help="일 최고기온 33°C 이상인 날을 포함합니다"
-        )
-    
-    st.divider()
-    
-    # 계산 버튼
-    if st.button("🔢 비작업일수 계산", type="primary", use_container_width=True):
-        try:
-            # 종료일 계산
-            calc_end_date = calc_start_date + timedelta(days=work_days_input)
-            
-            # 비작업일수 계산 (체크박스 값 전달)
-            non_work_days = get_total_non_work_days(
-                calc_region, 
-                calc_start_date, 
-                calc_end_date,
-                check_rain=check_rain,
-                check_cold=check_cold,
-                check_hot=check_hot
+    # ========================================================================
+    # TAB 4: 비작업일수 계산기
+    # ========================================================================
+    with tab4:
+        st.header("☂️ 비작업일수 계산기")
+        
+        if not MODULES_LOADED:
+            st.error("weather_data.py 모듈을 로드할 수 없어 비작업일수 계산 기능을 사용할 수 없습니다.")
+            return
+        
+        st.markdown("""
+        공사 기간 중 기후 조건에 따른 비작업일수를 계산합니다.
+        - **강우일**: 일 강수량 기준 작업 불가일
+        - **한랭일**: 일 최저기온 -10°C 이하
+        - **폭염일**: 일 최고기온 33°C 이상
+        """)
+        
+        # 기본 설정
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            calc_start_date = st.date_input(
+                "공사 시작일",
+                value=datetime(2026, 12, 25),
+                help="공사가 시작되는 날짜를 선택하세요",
+                key="calc_start_date"
             )
-            
-            # 실제 총공기
-            total_days = work_days_input + non_work_days
-            actual_end_date = calc_start_date + timedelta(days=total_days)
-            
-            # 결과 표시
-            st.success(f"✅ 계산 완료!")
-            
-            # 메트릭 표시
-            metric_col1, metric_col2, metric_col3, metric_col4 = st.columns(4)
-            
-            with metric_col1:
-                st.metric(
-                    label="순공기",
-                    value=f"{work_days_input:,}일",
-                    help="실제 작업일수"
-                )
-            
-            with metric_col2:
-                st.metric(
-                    label="비작업일수",
-                    value=f"{non_work_days:,}일",
-                    delta=f"{(non_work_days/work_days_input*100):.1f}%",
-                    help="기후 조건으로 인한 작업 불가일"
-                )
-            
-            with metric_col3:
-                st.metric(
-                    label="총 공기",
-                    value=f"{total_days:,}일",
-                    help="순공기 + 비작업일수"
-                )
-            
-            with metric_col4:
-                st.metric(
-                    label="예상 완공일",
-                    value=actual_end_date.strftime('%y.%m.%d'),
-                    help="공사 종료 예정일"
-                )
-            
-            # 상세 정보
-            st.info(f"""
-            📅 **공사 기간**: {calc_start_date.strftime('%Y년 %m월 %d일')} ~ {actual_end_date.strftime('%Y년 %m월 %d일')}  
-            📍 **지역**: {calc_region}  
-            🌦️ **적용 조건**: {'강우일' if check_rain else ''} {'한랭일' if check_cold else ''} {'폭염일' if check_hot else ''}
-            """)
-            
-            # 월별 상세 내역
-            st.subheader("📊 월별 비작업일수 상세")
-            
-            monthly_data = get_monthly_breakdown(
-                calc_region,
-                calc_start_date,
-                calc_end_date,
-                check_rain=check_rain,
-                check_cold=check_cold,
-                check_hot=check_hot
+        
+        with col2:
+            calc_region = st.selectbox(
+                "지역 선택",
+                options=list(REGION_MAPPING.keys()),
+                index=0,
+                help="공사 지역을 선택하세요",
+                key="calc_region"
             )
-            
-            if monthly_data:
-                # 데이터프레임 생성
-                import pandas as pd
-                df_monthly = pd.DataFrame(monthly_data)
-                df_monthly.columns = ["월", "강우일", "한랭일", "폭염일", "합계"]
+        
+        work_days_input = st.number_input(
+            "순공기(작업일수)",
+            min_value=1,
+            max_value=10000,
+            value=1200,
+            step=10,
+            help="실제 작업이 필요한 일수를 입력하세요"
+        )
+        
+        # 기후 조건 체크박스
+        st.subheader("🌦️ 기후 조건 선택")
+        st.caption("제외할 기후 조건을 선택하세요")
+        
+        col_a, col_b, col_c = st.columns(3)
+        
+        with col_a:
+            check_rain = st.checkbox(
+                "💧 강우일 제외", 
+                value=True,
+                help="강수량 기준 작업 불가일을 포함합니다"
+            )
+        
+        with col_b:
+            check_cold = st.checkbox(
+                "❄️ 한랭일 제외", 
+                value=True,
+                help="일 최저기온 -10°C 이하인 날을 포함합니다"
+            )
+        
+        with col_c:
+            check_hot = st.checkbox(
+                "🌡️ 폭염일 제외", 
+                value=True,
+                help="일 최고기온 33°C 이상인 날을 포함합니다"
+            )
+        
+        st.divider()
+        
+        # 계산 버튼
+        if st.button("🔢 비작업일수 계산", type="primary", use_container_width=True):
+            try:
+                # 종료일 계산
+                calc_end_date = calc_start_date + timedelta(days=work_days_input)
                 
-                # 표 표시
-                st.dataframe(
-                    df_monthly,
-                    use_container_width=True,
-                    hide_index=True
+                # 비작업일수 계산
+                non_work_days = get_total_non_work_days(
+                    calc_region, 
+                    calc_start_date, 
+                    calc_end_date,
+                    check_rain=check_rain,
+                    check_cold=check_cold,
+                    check_hot=check_hot
                 )
                 
-                # 차트 표시
-                import plotly.graph_objects as go
+                # 실제 총공기
+                total_calc_days = work_days_input + non_work_days
+                actual_end_date = calc_start_date + timedelta(days=total_calc_days)
                 
-                fig = go.Figure()
+                # 결과 표시
+                st.success(f"✅ 계산 완료!")
                 
-                if check_rain:
-                    fig.add_trace(go.Bar(
-                        name='강우일',
-                        x=df_monthly['월'],
-                        y=df_monthly['강우일'],
-                        marker_color='#4A90E2'
-                    ))
+                # 메트릭 표시
+                metric_col1, metric_col2, metric_col3, metric_col4 = st.columns(4)
                 
-                if check_cold:
-                    fig.add_trace(go.Bar(
-                        name='한랭일',
-                        x=df_monthly['월'],
-                        y=df_monthly['한랭일'],
-                        marker_color='#5BC0DE'
-                    ))
+                with metric_col1:
+                    st.metric(
+                        label="순공기",
+                        value=f"{work_days_input:,}일",
+                        help="실제 작업일수"
+                    )
                 
-                if check_hot:
-                    fig.add_trace(go.Bar(
-                        name='폭염일',
-                        x=df_monthly['월'],
-                        y=df_monthly['폭염일'],
-                        marker_color='#F0AD4E'
-                    ))
+                with metric_col2:
+                    st.metric(
+                        label="비작업일수",
+                        value=f"{non_work_days:,}일",
+                        delta=f"{(non_work_days/work_days_input*100):.1f}%",
+                        help="기후 조건으로 인한 작업 불가일"
+                    )
                 
-                fig.update_layout(
-                    title='월별 비작업일수',
-                    xaxis_title='월',
-                    yaxis_title='일수',
-                    barmode='stack',
-                    height=400,
-                    hovermode='x unified'
-                )
+                with metric_col3:
+                    st.metric(
+                        label="총 공기",
+                        value=f"{total_calc_days:,}일",
+                        help="순공기 + 비작업일수"
+                    )
                 
-                st.plotly_chart(fig, use_container_width=True)
-            
-        except Exception as e:
-            st.error(f"❌ 계산 중 오류 발생")
-            st.error(f"오류 내용: {str(e)}")
-            st.info("날짜와 지역을 다시 확인해주세요.")
-            
-            # 디버그 정보
-            with st.expander("🐛 디버그 정보"):
-                st.code(f"""
-시작일: {calc_start_date}
-지역: {calc_region}
-순공기: {work_days_input}
-강우일 체크: {check_rain}
-한랭일 체크: {check_cold}
-폭염일 체크: {check_hot}
-에러: {str(e)}
+                with metric_col4:
+                    st.metric(
+                        label="예상 완공일",
+                        value=actual_end_date.strftime('%y.%m.%d'),
+                        help="공사 종료 예정일"
+                    )
+                
+                # 상세 정보
+                st.info(f"""
+                📅 **공사 기간**: {calc_start_date.strftime('%Y년 %m월 %d일')} ~ {actual_end_date.strftime('%Y년 %m월 %d일')}  
+                📍 **지역**: {calc_region}  
+                🌦️ **적용 조건**: {'강우일' if check_rain else ''} {'한랭일' if check_cold else ''} {'폭염일' if check_hot else ''}
                 """)
+                
+                # 월별 상세 내역
+                st.subheader("📊 월별 비작업일수 상세")
+                
+                monthly_data = get_monthly_breakdown(
+                    calc_region,
+                    calc_start_date,
+                    calc_end_date,
+                    check_rain=check_rain,
+                    check_cold=check_cold,
+                    check_hot=check_hot
+                )
+                
+                if monthly_data:
+                    df_monthly = pd.DataFrame(monthly_data)
+                    df_monthly.columns = ["월", "강우일", "한랭일", "폭염일", "합계"]
+                    
+                    st.dataframe(
+                        df_monthly,
+                        use_container_width=True,
+                        hide_index=True
+                    )
+                
+            except Exception as e:
+                st.error(f"❌ 계산 중 오류 발생")
+                st.error(f"오류 내용: {str(e)}")
+                st.info("날짜와 지역을 다시 확인해주세요.")
+    
+    # ========================================================================
+    # TAB 5: 공정표
+    # ========================================================================
+    with tab5:
+        st.header("📅 공정표")
+        st.info("🚧 공정표 기능은 개발 중입니다.")
 
-# ============================================================================
-# TAB 5: 보고서
-# ============================================================================
-with tab5:
-    st.subheader("📄 공기산정 보고서")
-    st.info("🚧 준비중입니다")
+
+if __name__ == "__main__":
+    main()
