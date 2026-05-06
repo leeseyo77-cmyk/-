@@ -1016,6 +1016,9 @@ with tab1:
         estimated_heat = get_total_non_work_days(selected_region, 7, 8)
         col_c.metric("🔥 여름철 혹서기", f"{estimated_heat:.1f}일")
         
+        # 연간 혹서기 일수 가져오기
+        annual_heat_days = HEAT_DAYS.get(selected_region, {}).get("연간", 0)
+        
         st.info(f"""
         **📍 {selected_region} 지역 기상 정보**
         - 연간 혹서기 비작업일수: {annual_heat_days:.1f}일
