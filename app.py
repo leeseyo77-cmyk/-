@@ -322,7 +322,7 @@ def calc_completion_date(start, work_days):
 # 엑셀 파서
 # ══════════════════════════════════════════════════════════════
 def parse_by_keyword(file):
-    wb = openpyxl.load_workbook(file, read_only=True, data_only=True)
+    wb = openpyxl.load_workbook(file, data_only=True)  # read_only=False로 변경
     skip_sheets = ["목차","안내","INITIAL","초기","index"]
     priority = ["설계내역서","내역서","공사비내역서"]
     target_sheet = None
@@ -360,66 +360,109 @@ def parse_by_keyword(file):
         header_row = 1
     
     col_info["헤더행"] = header_row
-    all_rows = list(ws.iter_rows(min_row=header_row, values_only=True))
-    if not all_rows:
-        return [], col_info
     
+    # ══════════════════════════════════════════════════════════════
+    # 지구 경계 찾기 (로마숫자)
+    # ══════════════════════════════════════════════════════════════
+    districts = {}
+    roman_nums = ['Ⅰ', 'Ⅱ', 'Ⅲ', 'Ⅳ', 'Ⅴ', 'Ⅵ', 'Ⅶ', 'Ⅷ', 'Ⅸ', 'Ⅹ']
+    
+    all_rows_raw = list(ws.iter_rows(min_row=1, values_only=False))
+    
+    for row_idx, row in enumerate(all_rows_raw):
+        a_val = str(row[0].value or "").strip()
+        b_val = str(row[1].value or "").strip() if len(row) > 1 else ""
+        
+        if a_val in roman_nums:
+            districts[a_val] = {
+                'name': b_val,
+                'start_row': row_idx,
+                'end_row': None
+            }
+    
+    # 지구별 end_row 설정
+    district_keys = sorted(districts.keys(), key=lambda x: roman_nums.index(x))
+    for i, key in enumerate(district_keys):
+        if i + 1 < len(district_keys):
+            next_key = district_keys[i + 1]
+            districts[key]['end_row'] = districts[next_key]['start_row'] - 1
+        else:
+            districts[key]['end_row'] = len(all_rows_raw) - 1
+    
+    col_info["districts"] = districts
+    
+    # ══════════════════════════════════════════════════════════════
+    # 지구별 데이터 파싱
+    # ══════════════════════════════════════════════════════════════
     results = []
-    for row in all_rows[1:]:
-        if not row or all(c is None for c in row):
-            continue
-        
-        gong_jong = str(row[0]).strip() if row[0] else ""
-        name = str(row[1]).strip() if len(row) > 1 and row[1] else ""
-        spec = str(row[2]).strip() if len(row) > 2 and row[2] else ""
-        qty = row[3] if len(row) > 3 else 0
-        unit = str(row[4]).strip() if len(row) > 4 and row[4] else ""
-        
-        if not name or any(skip in name for skip in SKIP_NAMES):
-            continue
-        
-        try:
-            qty = float(qty) if qty else 0
-        except:
-            qty = 0
-        
-        if qty <= 0:
-            continue
-        
-        group = "기타"
-        for grp, keywords in KEYWORD_MAP_DETAIL.items():
-            if any(kw in name for kw in keywords):
-                group = grp
-                break
-        
-        if group == "관부설공" and any(ex in name for ex in PIPE_EXCLUDE):
-            group = "기타"
-        
-        detail_spec = spec
-        if not detail_spec and name:
-            spec_match = re.search(r'\([^)]+\)', name)
-            if spec_match:
-                detail_spec = spec_match.group(0)
-        
-        results.append({
-            "gong_jong": gong_jong,
-            "group": group,
-            "name": name,
-            "spec": detail_spec,
-            "qty": qty,
-            "unit": unit,
-            "amount": row[5] if len(row) > 5 else 0,
-            "labor": row[6] if len(row) > 6 else 0,
-        })
     
-    # 중복 제거
+    for district, info in districts.items():
+        district_rows = all_rows_raw[info['start_row']:info['end_row']+1]
+        
+        for local_idx, row in enumerate(district_rows):
+            row_idx = info['start_row'] + local_idx
+            
+            # values_only=False이므로 .value 접근
+            gong_jong_val = row[0].value
+            name_val = row[1].value if len(row) > 1 else None
+            spec_val = row[2].value if len(row) > 2 else None
+            qty_val = row[3].value if len(row) > 3 else None
+            unit_val = row[4].value if len(row) > 4 else None
+            
+            gong_jong = str(gong_jong_val).strip() if gong_jong_val else ""
+            name = str(name_val).strip() if name_val else ""
+            spec = str(spec_val).strip() if spec_val else ""
+            unit = str(unit_val).strip() if unit_val else ""
+            
+            if not name or any(skip in name for skip in SKIP_NAMES):
+                continue
+            
+            try:
+                qty = float(qty_val) if qty_val else 0
+            except:
+                qty = 0
+            
+            if qty <= 0:
+                continue
+            
+            group = "기타"
+            for grp, keywords in KEYWORD_MAP_DETAIL.items():
+                if any(kw in name for kw in keywords):
+                    group = grp
+                    break
+            
+            if group == "관부설공" and any(ex in name for ex in PIPE_EXCLUDE):
+                group = "기타"
+            
+            detail_spec = spec
+            if not detail_spec and name:
+                spec_match = re.search(r'\([^)]+\)', name)
+                if spec_match:
+                    detail_spec = spec_match.group(0)
+            
+            results.append({
+                "row_idx": row_idx,
+                "district": district,
+                "district_name": info['name'],
+                "gong_jong": gong_jong,
+                "group": group,
+                "name": name,
+                "spec": detail_spec,
+                "qty": qty,
+                "unit": unit,
+                "amount": row[5].value if len(row) > 5 else 0,
+                "labor": row[6].value if len(row) > 6 else 0,
+            })
+    
+    # 원본 순서로 정렬 (row_idx 기준)
+    results.sort(key=lambda x: x["row_idx"])
+    
+    # 중복 제거 (전체 데이터 기준)
     merged = {}
     for r in results:
         key = (r["name"], r["spec"])
         if key not in merged:
             merged[key] = dict(r)
-            # 항목명 그대로 유지 (괄호 제거하지 않음!)
-            merged[key]["name"] = r["name"]
         else:
             merged[key]["qty"] = (merged[key].get("qty") or 0) + (r.get("qty") or 0)
             merged[key]["amount"] = (merged[key].get("amount") or 0) + (r.get("amount") or 0)
@@ -808,6 +851,121 @@ with tab2:
                         "crew_settings": crew_settings,
                     }
                     st.session_state["total_work_days"] = int(max_days)
+                
+                # ══════════════════════════════════════════════════════════════
+                # 지구별 상세 섹션
+                # ══════════════════════════════════════════════════════════════
+                if col_info.get("districts"):
+                    st.markdown("---")
+                    st.markdown("## 📍 지구별 상세")
+                    
+                    # 지구별 데이터 그룹핑
+                    district_data = {}
+                    district_names = col_info["districts"]
+                    
+                    for item in matched:
+                        district = item.get("district", "전체")
+                        if district not in district_data:
+                            district_data[district] = []
+                        district_data[district].append(item)
+                    
+                    # 지구 선택
+                    selected_district = st.selectbox(
+                        "🏗️ 지구 선택",
+                        options=list(district_data.keys()),
+                        format_func=lambda x: f"{x}. {district_names.get(x, {}).get('name', x)}",
+                        key="district_selector"
+                    )
+                    
+                    selected_data = district_data[selected_district]
+                    
+                    st.markdown(f"### {selected_district}. {district_names.get(selected_district, {}).get('name', selected_district)}")
+                    st.caption(f"총 {len(selected_data)}개 항목")
+                    
+                    # 공종별 그룹핑
+                    group_names = {
+                        "포장복구": "🛣️ 포장공",
+                        "굴착공": "⛏️ 토공",
+                        "관부설공": "🔧 관부설공",
+                        "되메우기": "📦 되메우기",
+                        "맨홀공": "🕳️ 구조물공",
+                        "배수설비": "💧 배수설비",
+                        "추진공": "🚇 추진공",
+                        "기타": "📋 기타"
+                    }
+                    
+                    grouped_by_type = {}
+                    for item in selected_data:
+                        group = item.get("group", "기타")
+                        if group not in grouped_by_type:
+                            grouped_by_type[group] = []
+                        grouped_by_type[group].append(item)
+                    
+                    # 공종별 투입조수 설정
+                    st.markdown("#### 🔧 투입조수 설정")
+                    group_crews = {}
+                    
+                    cols = st.columns(4)
+                    for idx, (group, items) in enumerate(grouped_by_type.items()):
+                        with cols[idx % 4]:
+                            crew = st.number_input(
+                                f"{group_names.get(group, group)}",
+                                min_value=1,
+                                max_value=30,
+                                value=3,
+                                key=f"crew_{selected_district}_{group}"
+                            )
+                            group_crews[group] = crew
+                    
+                    st.markdown("---")
+                    
+                    # 공종별 표 표시
+                    for group in ["포장복구", "맨홀공", "굴착공", "관부설공", "되메우기", "배수설비", "추진공", "기타"]:
+                        if group not in grouped_by_type:
+                            continue
+                        
+                        items = grouped_by_type[group]
+                        crew = group_crews[group]
+                        
+                        with st.expander(f"{group_names.get(group, group)} ({len(items)}개 항목)", expanded=(group in ["포장복구", "맨홀공", "관부설공"])):
+                            display_items = []
+                            for item in items:
+                                days, label, method = calc_days_priority(
+                                    item["name"],
+                                    item.get("spec", ""),
+                                    item.get("qty", 0),
+                                    crew
+                                )
+                                display_items.append({
+                                    "공종": item["name"],
+                                    "규격": item.get("spec", ""),
+                                    "물량": item.get("qty", 0),
+                                    "단위": item.get("unit", ""),
+                                    "일당": label,
+                                    "조수": crew,
+                                    "일수": int(days)
+                                })
+                            
+                            if display_items:
+                                display_df = pd.DataFrame(display_items)
+                                
+                                st.dataframe(
+                                    display_df,
+                                    use_container_width=True,
+                                    height=400,
+                                    column_config={
+                                        "공종": st.column_config.TextColumn("공종", width="large"),
+                                        "규격": st.column_config.TextColumn("규격", width="large"),
+                                        "물량": st.column_config.NumberColumn("물량", width="medium", format="%.1f"),
+                                        "단위": st.column_config.TextColumn("단위", width="small"),
+                                        "일당": st.column_config.TextColumn("일당", width="medium"),
+                                        "조수": st.column_config.NumberColumn("조수", width="small"),
+                                        "일수": st.column_config.NumberColumn("일수", width="small"),
+                                    }
+                                )
+                                
+                                total_days = sum(item["일수"] for item in display_items)
+                                st.metric(f"{group_names.get(group, group)} 총 작업일수", f"{total_days}일")
                     
         except Exception as e:
             st.error(f"파싱 실패: {e}")
