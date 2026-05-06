@@ -1149,8 +1149,180 @@ with tab4:
 # TAB 5
 # ══════════════════════════════════════════════════════════════
 with tab5:
-    st.subheader("공기산정 보고서")
+    st.subheader("📄 공기산정 보고서")
+    
     if "work_result" not in st.session_state:
         st.warning("TAB 2에서 엑셀을 먼저 업로드해주세요.")
     else:
-        st.info("📄 보고서 생성 기능은 추후 업데이트 예정입니다.")
+        st.markdown("### 📊 보고서 생성")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            project_name = st.text_input("공사명", value="상하수도 관로공사", key="project_name")
+        with col2:
+            client_name = st.text_input("발주처", value="", key="client_name")
+        
+        col3, col4 = st.columns(2)
+        with col3:
+            start_date_input = st.date_input("착공일", datetime.now().date(), key="report_start_date")
+        with col4:
+            total_work_days = st.session_state.get('total_work_days', 0)
+            st.metric("순작업일수", f"{total_work_days}일")
+        
+        st.markdown("---")
+        
+        if st.button("📥 엑셀 보고서 생성", type="primary", use_container_width=True):
+            try:
+                from openpyxl import Workbook
+                from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+                from io import BytesIO
+                
+                # 새 워크북 생성
+                wb = Workbook()
+                
+                # ═══════════════════════════════════════════════════════
+                # Sheet 1: 표지
+                # ═══════════════════════════════════════════════════════
+                ws_cover = wb.active
+                ws_cover.title = "표지"
+                
+                ws_cover['A5'] = project_name
+                ws_cover['A5'].font = Font(size=18, bold=True)
+                ws_cover['A5'].alignment = Alignment(horizontal='center')
+                
+                ws_cover['A7'] = "공사기간 산정 검토서"
+                ws_cover['A7'].font = Font(size=16, bold=True)
+                ws_cover['A7'].alignment = Alignment(horizontal='center')
+                
+                ws_cover['A10'] = f"작성일: {datetime.now().strftime('%Y년 %m월 %d일')}"
+                ws_cover['A10'].alignment = Alignment(horizontal='center')
+                
+                # ═══════════════════════════════════════════════════════
+                # Sheet 2: 공사기간 산정
+                # ═══════════════════════════════════════════════════════
+                ws_calc = wb.create_sheet("2. 공사기간 산정")
+                
+                ws_calc['A1'] = "2. 공사기간 산정"
+                ws_calc['A1'].font = Font(size=14, bold=True)
+                
+                ws_calc['A3'] = "2.1 작업일수"
+                ws_calc['A3'].font = Font(size=12, bold=True)
+                
+                # 공종별 작업일수 표
+                headers = ["공종", "물량", "투입조수", "작업일수(일)"]
+                for col_idx, header in enumerate(headers, 1):
+                    cell = ws_calc.cell(row=5, column=col_idx, value=header)
+                    cell.font = Font(bold=True)
+                    cell.fill = PatternFill(start_color="DDEBF7", end_color="DDEBF7", fill_type="solid")
+                    cell.border = Border(
+                        left=Side(style='thin'),
+                        right=Side(style='thin'),
+                        top=Side(style='thin'),
+                        bottom=Side(style='thin')
+                    )
+                
+                work_result = st.session_state["work_result"]
+                rows = work_result["rows"]
+                
+                for row_idx, row_data in enumerate(rows, 6):
+                    ws_calc.cell(row=row_idx, column=1, value=row_data["공종"])
+                    ws_calc.cell(row=row_idx, column=2, value=row_data["물량"])
+                    ws_calc.cell(row=row_idx, column=3, value=row_data["투입조수"])
+                    ws_calc.cell(row=row_idx, column=4, value=row_data["작업일수(일)"])
+                    
+                    for col in range(1, 5):
+                        cell = ws_calc.cell(row=row_idx, column=col)
+                        cell.border = Border(
+                            left=Side(style='thin'),
+                            right=Side(style='thin'),
+                            top=Side(style='thin'),
+                            bottom=Side(style='thin')
+                        )
+                
+                # 합계
+                total_row = 6 + len(rows)
+                ws_calc.cell(row=total_row, column=1, value="합계")
+                ws_calc.cell(row=total_row, column=1).font = Font(bold=True)
+                ws_calc.cell(row=total_row, column=4, value=total_work_days)
+                ws_calc.cell(row=total_row, column=4).font = Font(bold=True)
+                
+                # 주공정 표시
+                max_days = max((r["작업일수(일)"] for r in rows), default=0)
+                ws_calc[f'A{total_row+2}'] = f"🔴 주공정 (Critical Path): {max_days}일"
+                ws_calc[f'A{total_row+2}'].font = Font(bold=True, color="C00000")
+                
+                # ═══════════════════════════════════════════════════════
+                # Sheet 3: 부록1. 작업일수 산정 (TAB2 데이터)
+                # ═══════════════════════════════════════════════════════
+                ws_appendix = wb.create_sheet("부록1. 작업일수 산정")
+                
+                ws_appendix['A1'] = "◈ 부록1. 작업일수 산정"
+                ws_appendix['A1'].font = Font(size=14, bold=True)
+                
+                # 지구별 데이터가 있으면 추가
+                if "districts" in st.session_state:
+                    district_data = st.session_state.get("districts", {})
+                    
+                    current_row = 3
+                    for district, items in district_data.items():
+                        ws_appendix.cell(row=current_row, column=1, value=f"{district}").font = Font(bold=True, size=12)
+                        current_row += 1
+                        
+                        # 헤더
+                        headers_detail = ["공종", "규격", "물량", "단위", "일당", "조수", "일수", "출처"]
+                        for col_idx, header in enumerate(headers_detail, 1):
+                            cell = ws_appendix.cell(row=current_row, column=col_idx, value=header)
+                            cell.font = Font(bold=True)
+                            cell.fill = PatternFill(start_color="E7E6E6", end_color="E7E6E6", fill_type="solid")
+                        
+                        current_row += 1
+                        
+                        # 데이터
+                        for item in items[:50]:  # 최대 50개만
+                            ws_appendix.cell(row=current_row, column=1, value=item.get("공종", ""))
+                            ws_appendix.cell(row=current_row, column=2, value=item.get("규격", ""))
+                            ws_appendix.cell(row=current_row, column=3, value=item.get("물량", 0))
+                            ws_appendix.cell(row=current_row, column=4, value=item.get("단위", ""))
+                            ws_appendix.cell(row=current_row, column=5, value=item.get("일당", ""))
+                            ws_appendix.cell(row=current_row, column=6, value=item.get("조수", 3))
+                            ws_appendix.cell(row=current_row, column=7, value=item.get("일수", 0))
+                            ws_appendix.cell(row=current_row, column=8, value=item.get("출처", ""))
+                            current_row += 1
+                        
+                        current_row += 2
+                
+                # 컬럼 너비 조정
+                ws_calc.column_dimensions['A'].width = 40
+                ws_calc.column_dimensions['B'].width = 15
+                ws_calc.column_dimensions['C'].width = 15
+                ws_calc.column_dimensions['D'].width = 15
+                
+                ws_appendix.column_dimensions['A'].width = 40
+                ws_appendix.column_dimensions['B'].width = 30
+                ws_appendix.column_dimensions['C'].width = 12
+                ws_appendix.column_dimensions['D'].width = 10
+                ws_appendix.column_dimensions['E'].width = 20
+                ws_appendix.column_dimensions['F'].width = 10
+                ws_appendix.column_dimensions['G'].width = 10
+                ws_appendix.column_dimensions['H'].width = 15
+                
+                # BytesIO로 저장
+                excel_buffer = BytesIO()
+                wb.save(excel_buffer)
+                excel_buffer.seek(0)
+                
+                # 다운로드 버튼
+                st.success("✅ 보고서가 생성되었습니다!")
+                st.download_button(
+                    label="📥 엑셀 다운로드",
+                    data=excel_buffer,
+                    file_name=f"공사기간_산정_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True
+                )
+                
+            except Exception as e:
+                st.error(f"보고서 생성 실패: {e}")
+                import traceback
+                st.code(traceback.format_exc())
